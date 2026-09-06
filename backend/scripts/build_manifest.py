@@ -1,7 +1,15 @@
-"""Build CSV manifests for dataset splits.
+"""
+Build a VoxShield manifest from ASVspoof 2021 DF metadata.
 
-This module creates placeholder manifest files that can later be populated with
-file paths and labels for training and evaluation.
+Expected metadata columns:
+    0 = source
+    1 = audio ID
+    5 = label
+    8 = attack
+
+Labels:
+    bonafide -> 0
+    spoof    -> 1
 """
 
 from __future__ import annotations
@@ -12,33 +20,137 @@ from pathlib import Path
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build dataset manifest CSV files.")
-    parser.add_argument("--processed-root", type=Path, default=Path("datasets/processed"), help="Root directory for processed splits.")
-    parser.add_argument("--manifest-root", type=Path, default=Path("datasets/manifests"), help="Directory to write manifest CSV files.")
+    parser = argparse.ArgumentParser(
+        description="Build ASVspoof 2021 DF manifest."
+    )
+
+    parser.add_argument(
+        "--audio-root",
+        type=Path,
+        required=True,
+        help="Directory containing DF .flac files.",
+    )
+
+    parser.add_argument(
+        "--metadata",
+        type=Path,
+        required=True,
+        help="Path to ASVspoof DF trial_metadata.txt.",
+    )
+
+    parser.add_argument(
+        "--output",
+        type=Path,
+        required=True,
+        help="Output manifest CSV.",
+    )
+
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    manifest_root = args.manifest_root
-    manifest_root.mkdir(parents=True, exist_ok=True)
 
-    for split in ("train", "validation", "test"):
-        rows = []
-        for label in ("bonafide", "spoof"):
-            split_dir = args.processed_root / split / label
-            if not split_dir.exists():
+    if not args.audio_root.exists():
+        raise FileNotFoundError(
+            f"Audio directory not found: {args.audio_root}"
+        )
+
+    if not args.metadata.exists():
+        raise FileNotFoundError(
+            f"Metadata file not found: {args.metadata}"
+        )
+
+    # Find all available audio files.
+    audio_files = {
+        path.stem: path
+        for path in args.audio_root.glob("*.flac")
+    }
+
+    print(f"Audio files found: {len(audio_files)}")
+
+    entries = []
+
+    with args.metadata.open(
+        "r",
+        encoding="utf-8",
+    ) as metadata_file:
+
+        for line in metadata_file:
+
+            line = line.strip()
+
+            if not line:
                 continue
-            for audio_file in sorted(split_dir.glob("**/*.*")):
-                rows.append({"path": str(audio_file.relative_to(args.processed_root.parent)), "label": label})
 
-        manifest_path = manifest_root / f"{split}.csv"
-        with manifest_path.open("w", newline="", encoding="utf-8") as csv_file:
-            writer = csv.DictWriter(csv_file, fieldnames=["path", "label"])
-            writer.writeheader()
-            writer.writerows(rows)
+            columns = line.split()
 
-        print(f"Wrote manifest: {manifest_path} ({len(rows)} rows)")
+            if len(columns) < 9:
+                continue
+
+            audio_id = columns[1]
+            label_text = columns[5]
+            attack = columns[8]
+
+            # Only include audio that actually exists.
+            if audio_id not in audio_files:
+                continue
+
+            if label_text == "bonafide":
+                label = 0
+            elif label_text == "spoof":
+                label = 1
+            else:
+                continue
+
+            entries.append(
+                {
+                    "path": str(audio_files[audio_id]),
+                    "label": label,
+                    "split": "test",
+                    "attack": attack,
+                }
+            )
+
+    args.output.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    with args.output.open(
+        "w",
+        newline="",
+        encoding="utf-8",
+    ) as output_file:
+
+        writer = csv.DictWriter(
+            output_file,
+            fieldnames=[
+                "path",
+                "label",
+                "split",
+                "attack",
+            ],
+        )
+
+        writer.writeheader()
+        writer.writerows(entries)
+
+    print(f"Manifest written: {args.output}")
+    print(f"Manifest rows: {len(entries)}")
+
+    spoof = sum(
+        entry["label"] == 1
+        for entry in entries
+    )
+
+    bonafide = sum(
+        entry["label"] == 0
+        for entry in entries
+    )
+
+    print(f"Spoof: {spoof}")
+    print(f"Bonafide: {bonafide}")
 
 
 if __name__ == "__main__":
