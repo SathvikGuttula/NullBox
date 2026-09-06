@@ -1,0 +1,58 @@
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Node
+node_modules/
+.next/
+out/
+
+# Logs
+*.log
+logs/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ML artifacts
+*.pt
+*.pth
+*.onnx
+*.pkl
+*.joblib
+
+# Audio
+*.wav
+*.mp3
+*.flac
+*.ogg
+
+# Temporary
+tmp/
+temp/
+
+#Datasets
+datasets/raw/
+datasets/processed/
+models/*.pt
+models/*.bin
+models/*.safetensors

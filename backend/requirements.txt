@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+sqlalchemy
+asyncpg
+python-dotenv
+pytest
+httpx
+
+numpy
+scipy
+librosa
+soundfile

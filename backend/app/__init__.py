@@ -1,0 +1,3 @@
+"""
+VoxShield backend application.
+"""

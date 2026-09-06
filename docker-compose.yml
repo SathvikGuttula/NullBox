@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:17
+    container_name: voxshield-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_USER: voxshield
+      POSTGRES_PASSWORD: voxshield
+      POSTGRES_DB: voxshield
+
+    ports:
+      - "5432:5432"
+
+    volumes:
+      - voxshield_postgres_data:/var/lib/postgresql/data
+
+volumes:
+  voxshield_postgres_data:
