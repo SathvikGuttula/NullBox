@@ -47,6 +47,7 @@ from pathlib import Path
 # Allow "python backend/scripts/build_manifest.py" from the repo root.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.ml import discovery  # noqa: E402
 from app.ml.progress import PhaseTimer, format_count  # noqa: E402
 
 
@@ -464,6 +465,77 @@ def build_asvspoof2019_la(
 # ---------------------------------------------------------------------------
 
 
+SPLIT_TO_MANIFEST = {
+    "train": "train.csv",
+    "validation": "validation.csv",
+    "test": "test.csv",
+}
+
+
+def build_discovered(
+    root: Path,
+    manifest_dir: Path,
+    relative_to: Path | None,
+    holdout_attacks: str | None,
+) -> None:
+    """
+    Find whatever ASVspoof corpus is under ``root`` and build manifests for it.
+
+    Used when the layout is unknown - a Kaggle dataset mount, a Drive folder, a
+    zip someone made by hand. See app/ml/discovery.py for how splits are
+    identified from utterance-id prefixes rather than directory names.
+    """
+
+    with PhaseTimer(f"scanning {root} for an ASVspoof corpus"):
+        layout = discovery.discover(root)
+
+    print()
+    print(layout.describe())
+    print()
+
+    if not layout.audio:
+        raise SystemExit(
+            f"no ASVspoof audio found under {root}.\n"
+            "Expected files named like LA_T_1138215.flac / DF_E_2000011.flac.\n"
+            "Check the path, and that the archive was actually extracted."
+        )
+
+    missing = [s for s in layout.audio if s not in layout.protocols]
+    if missing:
+        print(
+            f"  WARNING: no protocol found for split(s): {', '.join(missing)}\n"
+            f"  Those splits cannot be labelled and will be skipped. For "
+            f"ASVspoof 2021 DF the labels ship separately as "
+            f"DF-keys-full.tar.gz - extract it under {root} and re-run.\n"
+        )
+
+    total = 0
+
+    for split in sorted(layout.audio):
+        if split not in layout.protocols:
+            continue
+
+        output = manifest_dir / SPLIT_TO_MANIFEST.get(split, f"{split}.csv")
+
+        total += build_split(
+            audio_root=layout.audio[split],
+            protocol=layout.protocols[split],
+            split=split,
+            output=output,
+            relative_to=relative_to,
+        )
+
+    print(f"\nTotal rows across all splits: {format_count(total)}")
+
+    holdout = {
+        token.strip().upper()
+        for token in (holdout_attacks or "").split(",")
+        if token.strip()
+    }
+    if holdout and "train" in layout.audio and "validation" in layout.audio:
+        build_attack_holdout(manifest_dir, holdout)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Build VoxShield manifests from ASVspoof protocol files.",
@@ -475,6 +547,17 @@ def parse_args() -> argparse.Namespace:
         "--asvspoof2019-la",
         type=Path,
         help="Path to the extracted LA/ directory; builds all three manifests.",
+    )
+
+    parser.add_argument(
+        "--discover",
+        type=Path,
+        help="Point at ANY directory containing an ASVspoof corpus and let the "
+             "layout be found automatically. Splits are identified from the "
+             "utterance-id prefixes (LA_T_/LA_D_/LA_E_/DF_E_) rather than folder "
+             "names, so this works on a Kaggle dataset, a Drive folder or a "
+             "hand-made zip without being told the structure. Use this instead "
+             "of --asvspoof2019-la when you do not know the layout.",
     )
 
     parser.add_argument("--audio-root", type=Path, help="Directory containing the audio.")
@@ -516,6 +599,15 @@ def main() -> None:
 
     repo_root = Path(__file__).resolve().parents[2]
     relative_to = None if args.absolute_paths else repo_root
+
+    if args.discover:
+        build_discovered(
+            root=args.discover.resolve(),
+            manifest_dir=args.manifest_dir,
+            relative_to=relative_to,
+            holdout_attacks=args.holdout_attacks,
+        )
+        return
 
     if args.asvspoof2019_la:
         build_asvspoof2019_la(

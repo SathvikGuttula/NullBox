@@ -43,7 +43,9 @@ synthetic-speech forensics
 | Blockchain audit layer | not started |
 | Dashboard | scaffold only |
 
-The immediate blocker is the ASVspoof 2019 LA download. See **[TRAINING.md](TRAINING.md)**.
+Nothing blocks training any more: ASVspoof 2019 LA is a public Kaggle dataset,
+so it attaches with one click. See **[TRAINING.md](TRAINING.md)** and
+`notebooks/VoxShield_Kaggle_Training.ipynb`.
 
 ## Requirements
 
@@ -98,8 +100,10 @@ pytest -v -m slow    # tests that download the pretrained encoder
 
 ## Training a model
 
-See **[TRAINING.md](TRAINING.md)** — dataset download, manifests, the training
-recipe sized for a 6 GB laptop GPU, and what to report.
+Fastest path is Kaggle — **`notebooks/VoxShield_Kaggle_Training.ipynb`**.
+ASVspoof 2019 LA is already a public Kaggle dataset, so there is no
+download; attach it and train on a P100. A Colab notebook and the local
+recipe are in **[TRAINING.md](TRAINING.md)**, along with what to report.
 
 Short version:
 

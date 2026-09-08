@@ -113,7 +113,47 @@ torchaudio reshuffles its backends. No action needed — just don't reintroduce
 
 ---
 
-## Train on Colab instead (recommended)
+## Where to train
+
+| | this laptop | Colab free | **Kaggle free** |
+|---|---|---|---|
+| GPU | RTX 3050 **6 GB** | T4 16 GB | **P100 16 GB** or T4 x2 |
+| Quota | unlimited | opaque | **30 GPU-h/week**, visible |
+| Session | unlimited | ~12 h | 12 h, **runs with the tab closed** |
+| Dataset | 43 h download | fast download | **already a public dataset** |
+| Google Drive | n/a | mountable | **not mountable** |
+
+**Kaggle is the current path** — `notebooks/VoxShield_Kaggle_Training.ipynb`.
+ASVspoof 2019 LA is already hosted there (`asvpoof-2019-dataset-la`), so there
+is no download at all: attach it and it mounts read-only under `/kaggle/input`.
+
+Two things to set before running anything:
+
+1. **Settings → Internet → On** (needs phone verification). Without it, both
+   `pip install` and the wav2vec2 download fail.
+2. **Add Data → `asvpoof-2019-dataset-la`**, and for section 8,
+   `mohammedabdeldayem/avsspoof-2021`.
+
+Kaggle specifics the notebook handles:
+
+- **No Drive mount.** There is no `google.colab.drive` equivalent. `gdown` on a
+  share link works for small files and fails on multi-GB ones. Use Kaggle
+  Datasets — which for ASVspoof someone has already done for you.
+- **`/kaggle/working` is capped at 20 GB** and is what persists as the
+  notebook's output. Checkpoints go there; the ~8 GB rebuildable waveform cache
+  goes to `/kaggle/temp` instead, so it does not eat the quota.
+- **Layout is discovered, not assumed.** Kaggle re-packagers rename and re-nest
+  freely, so `build_manifest.py --discover /kaggle/input` identifies splits from
+  utterance-id prefixes (`LA_T_`/`LA_D_`/`LA_E_`/`DF_E_`) rather than folder
+  names. Verified against a folder literally named `train` containing eval clips.
+- **12-hour cap** → `--resume` restores weights, AdamW moments, LR schedule and
+  epoch counter, so a cutoff costs one epoch. Use **Save & Run All (Commit)** so
+  the run survives closing the tab.
+
+The Colab notebook (`VoxShield_Colab_Training.ipynb`) still works if quota frees
+up, and the local path below remains valid for inference and the demo.
+
+## Train on Colab (alternative)
 
 Two measurements settle this:
 

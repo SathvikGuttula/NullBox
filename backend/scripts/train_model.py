@@ -132,6 +132,12 @@ def parse_args() -> argparse.Namespace:
 
     output = parser.add_argument_group("output")
     output.add_argument("--experiment-id", type=str)
+    output.add_argument(
+        "--experiments-dir",
+        type=str,
+        help="Where per-run artifacts go (default: experiments/). On Kaggle "
+             "point this at /kaggle/working so it survives the session.",
+    )
     output.add_argument("--model-out", type=str)
     output.add_argument("--notes", type=str)
 
