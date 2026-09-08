@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -9,10 +10,26 @@ from app.config import settings
 from app.database import init_db
 
 
+logger = logging.getLogger("voxshield")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 
-    await init_db()
+    # A missing database must not stop the API from booting. The audio
+    # analysis path does not touch Postgres at all, so refusing to start
+    # without Docker running would take the live demo down over a dependency
+    # it does not use. Persistence degrades; detection keeps working.
+    try:
+        await init_db()
+        app.state.database_available = True
+    except Exception as exc:
+        app.state.database_available = False
+        logger.warning(
+            "database unavailable, continuing without persistence: %s: %s",
+            type(exc).__name__,
+            exc,
+        )
 
     yield
 

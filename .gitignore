@@ -56,3 +56,10 @@ datasets/processed/
 models/*.pt
 models/*.bin
 models/*.safetensors
+# VoxShield ML artifacts
+datasets/cache/
+experiments/*/
+!experiments/.gitkeep
+models/*
+!models/.gitkeep
+*.calibration.json

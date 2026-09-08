@@ -1,6 +1,7 @@
 import json
 
 from fastapi import WebSocket, WebSocketDisconnect
+from starlette.concurrency import run_in_threadpool
 
 from app.audio.feature_pipeline import (
     AudioFeaturePipeline,
@@ -68,14 +69,27 @@ class AudioStreamManager:
                     await websocket.receive()
                 )
 
+                # websocket.receive() returns the raw ASGI message and does
+                # NOT raise on disconnect - it yields a disconnect message.
+                # Relying on the WebSocketDisconnect except-branch alone left
+                # this loop spinning on a dead socket forever.
+                if message.get("type") == "websocket.disconnect":
+                    await self.disconnect(call_id)
+                    return
+
                 if "bytes" in message:
 
                     audio_bytes = (
                         message["bytes"]
                     )
 
-                    result = pipeline.process(
-                        audio_bytes
+                    # Feature extraction and model inference are synchronous
+                    # CPU/GPU work measured in tens of milliseconds. Running
+                    # them inline would block the event loop and stall every
+                    # other concurrent call on this worker.
+                    result = await run_in_threadpool(
+                        pipeline.process,
+                        audio_bytes,
                     )
 
                     segment_id += 1
