@@ -63,3 +63,6 @@ experiments/*/
 models/*
 !models/.gitkeep
 *.calibration.json
+
+# Code bundle for Colab upload
+voxshield_code.zip
