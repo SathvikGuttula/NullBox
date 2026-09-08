@@ -6,6 +6,8 @@ folder, a hand-made zip. These tests use deliberately awkward layouts, because
 the layouts that matter are the ones nobody planned for.
 """
 
+import pathlib
+
 import numpy as np
 import pytest
 import soundfile as sf
@@ -211,3 +213,90 @@ def test_describe_is_readable(official):
 
     assert "[train]" in text
     assert "protocol" in text
+
+
+# ---------------------------------------------------------------------------
+# regressions from the Kaggle run
+# ---------------------------------------------------------------------------
+
+
+def write_cm_protocol(path, prefix, n):
+    """Countermeasure protocol: speaker utt - attack label."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = []
+    # ASVspoof sorts every bonafide utterance FIRST. That ordering is the bug.
+    for i in range(n // 10):
+        rows.append(f"LA_{i%9:04d} {prefix}_{1000000+i} - - bonafide")
+    for i in range(n // 10, n):
+        rows.append(f"LA_{i%9:04d} {prefix}_{1000000+i} - A0{i%6+1} spoof")
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+
+def write_asv_protocol(path, prefix, n):
+    """ASV protocol: speaker utt label trial. Larger, and NOT what we want."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for i in range(n):
+        label = "bonafide" if i % 4 == 0 else "spoof"
+        trial = "target" if i % 3 else "nontarget"
+        rows.append(f"LA_{i%9:04d} {prefix}_{1000000+i} {label} {trial}")
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+
+def test_cm_protocol_beats_a_larger_asv_protocol(tmp_path):
+    """
+    The Kaggle failure. Both protocol families mention bonafide/spoof and the
+    ASV one is bigger, so "largest wins" chose it - producing a test manifest
+    that was 100% bonafide with 63,882 rows discarded.
+    """
+
+    for i in range(20):
+        write_clip(tmp_path / "LA/eval/flac" / f"LA_E_{1000000+i}.flac")
+
+    write_cm_protocol(tmp_path / "LA/cm_protocols/eval.trl.txt", "LA_E", 20)
+    write_asv_protocol(tmp_path / "LA/asv_protocols/eval.gi.trl.txt", "LA_E", 200)
+
+    layout = discover(tmp_path)
+
+    chosen = layout.protocols["test"]
+    assert "cm" in str(chosen), f"picked the ASV protocol: {chosen}"
+
+
+def test_asv_protocol_alone_is_still_usable(tmp_path):
+    """If only an ASV protocol exists, use it rather than finding nothing."""
+
+    for i in range(20):
+        write_clip(tmp_path / "eval" / f"LA_E_{1000000+i}.flac")
+    write_asv_protocol(tmp_path / "asv/eval.trl.txt", "LA_E", 40)
+
+    assert "test" in discover(tmp_path).protocols
+
+
+def test_attack_column_survives_bonafide_first_ordering(tmp_path):
+    """
+    The second Kaggle failure. detect_columns sampled the first 2000 rows, and
+    ASVspoof lists all bonafide first - so it saw only attack="-" and reported
+    no attack column, which made the held-out-attack split impossible.
+    """
+
+    import sys
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "bm", pathlib.Path(__file__).resolve().parents[1] / "scripts" / "build_manifest.py"
+    )
+    bm = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bm)
+
+    protocol = tmp_path / "train.trn.txt"
+    write_cm_protocol(protocol, "LA_T", 25000)   # 2500 bonafide first
+
+    rows = bm.read_protocol_rows(protocol)
+    audio_index = {r[1]: pathlib.Path(f"{r[1]}.flac") for r in rows}
+
+    columns = bm.detect_columns(rows, audio_index)
+
+    assert columns["attack"] is not None, "attack column missed again"
+    assert columns["label"] == 4
+    assert columns["id"] == 1

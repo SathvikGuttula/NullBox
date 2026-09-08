@@ -24,6 +24,7 @@ not by name - so a renamed protocol still resolves.
 from __future__ import annotations
 
 import os
+import re
 import sys
 from collections import Counter
 from dataclasses import dataclass, field
@@ -36,6 +37,12 @@ AUDIO_SUFFIXES = (".flac", ".wav", ".ogg")
 PROTOCOL_SUFFIXES = (".txt", ".trl", ".trn", ".lst", ".csv", ".tsv")
 
 MAX_CANDIDATES = 4000
+
+# A01..A19 in ASVspoof 2019/2021 countermeasure protocols.
+ATTACK_CODE = re.compile(r"^A\d{2}$")
+
+# Present in ASV (speaker verification) protocols, absent from CM ones.
+ASV_TRIAL_VALUES = {"target", "nontarget", "zerotarget"}
 
 # utterance-id prefix -> split name used throughout VoxShield
 PREFIX_TO_SPLIT = {
@@ -215,13 +222,27 @@ def count_audio(directory: Path, split: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-def looks_like_protocol(path: Path, probe_lines: int = 20) -> str | None:
+def inspect_protocol(path: Path, probe_lines: int = 4000) -> tuple[str | None, bool]:
     """
-    Return the split this file labels, or None if it is not a protocol.
+    Return ``(split, is_countermeasure)`` for a candidate protocol file.
 
-    Identified by content: a protocol has whitespace-separated columns, one of
-    which is bonafide/spoof, and utterance ids whose prefix names the split.
-    That survives any renaming of the file itself.
+    ``is_countermeasure`` is the important half. ASVspoof ships two protocol
+    families side by side and they are NOT interchangeable:
+
+        ASVspoof2019_LA_cm_protocols/   LA_0079 LA_T_1138215 - A01 spoof
+                                        countermeasure: bonafide vs spoof
+
+        ASVspoof2019_LA_asv_protocols/  LA_0073 LA_D_4004968 bonafide target
+                                        speaker verification: target vs nontarget
+
+    Both mention bonafide and spoof, so "contains a label column" cannot tell
+    them apart - and the ASV file is the *larger* of the two, so picking the
+    biggest match silently chose the wrong one. Scoring an anti-spoof model
+    against ASV trials produced a manifest that was 100% bonafide with 63,882
+    rows discarded.
+
+    The reliable discriminator is the attack column: a CM protocol carries
+    A01..A19 codes, an ASV protocol carries target/nontarget instead.
     """
 
     try:
@@ -234,13 +255,13 @@ def looks_like_protocol(path: Path, probe_lines: int = 20) -> str | None:
                 if columns:
                     rows.append(columns)
     except OSError:
-        return None
+        return None, False
 
     if not rows:
-        return None
+        return None, False
 
     if not any(any(c in LABEL_VALUES for c in row) for row in rows):
-        return None
+        return None, False
 
     splits: Counter = Counter()
     for row in rows:
@@ -250,9 +271,22 @@ def looks_like_protocol(path: Path, probe_lines: int = 20) -> str | None:
                 splits[split] += 1
 
     if not splits:
-        return None
+        return None, False
 
-    return splits.most_common(1)[0][0]
+    has_attack = any(
+        ATTACK_CODE.match(column) for row in rows for column in row
+    )
+    has_asv_trial = any(
+        column in ASV_TRIAL_VALUES for row in rows for column in row
+    )
+
+    return splits.most_common(1)[0][0], (has_attack and not has_asv_trial)
+
+
+def looks_like_protocol(path: Path, probe_lines: int = 4000) -> str | None:
+    """Split this file labels, or None. See :func:`inspect_protocol`."""
+
+    return inspect_protocol(path, probe_lines)[0]
 
 
 def select_protocols(candidates: list[Path]) -> dict[str, Path]:
@@ -267,7 +301,7 @@ def select_protocols(candidates: list[Path]) -> dict[str, Path]:
     which is what made this slow on a network mount.
     """
 
-    best: dict[str, tuple[int, Path]] = {}
+    best: dict[str, tuple[int, int, Path]] = {}
 
     for path in candidates:
         try:
@@ -278,14 +312,20 @@ def select_protocols(candidates: list[Path]) -> dict[str, Path]:
         if size == 0 or size > 200 * 1024 * 1024:
             continue
 
-        split = looks_like_protocol(path)
+        split, is_cm = inspect_protocol(path)
         if split is None:
             continue
 
-        if split not in best or size > best[split][0]:
-            best[split] = (size, path)
+        # Rank on (is_countermeasure, size). A countermeasure protocol always
+        # beats an ASV one regardless of size; size only breaks ties within a
+        # family, where it correctly prefers the full protocol over a truncated
+        # sample left beside it.
+        rank = (1 if is_cm else 0, size)
 
-    return {split: path for split, (_, path) in best.items()}
+        if split not in best or rank > best[split][:2]:
+            best[split] = (rank[0], rank[1], path)
+
+    return {split: path for split, (_, _, path) in best.items()}
 
 
 def find_protocols(root: Path) -> dict[str, Path]:

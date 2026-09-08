@@ -86,6 +86,16 @@ def read_protocol_rows(protocol: Path) -> list[list[str]]:
     return rows
 
 
+def _spread_sample(rows: list[list[str]], count: int) -> list[list[str]]:
+    """Evenly strided sample across the whole list, so sorting cannot skew it."""
+
+    if len(rows) <= count:
+        return rows
+
+    stride = len(rows) / count
+    return [rows[int(i * stride)] for i in range(count)]
+
+
 def detect_columns(rows: list[list[str]], audio_index: dict[str, Path]) -> dict:
     """
     Work out which column holds the id, the label and the attack code.
@@ -96,7 +106,12 @@ def detect_columns(rows: list[list[str]], audio_index: dict[str, Path]) -> dict:
     if not rows:
         raise ValueError("protocol file is empty")
 
-    sample = rows[: min(len(rows), 2000)]
+    # Sample ACROSS the file, not the first N rows. ASVspoof protocols are
+    # sorted with every bonafide utterance first, and train has 2,580 of them -
+    # so a 2,000-row head slice sees nothing but attack="-" and concludes there
+    # is no attack column at all. That silently emptied the attack field, which
+    # in turn made the attack-held-out split impossible to build.
+    sample = _spread_sample(rows, 2000)
     width = min(len(row) for row in sample)
 
     if width == 0:
@@ -173,11 +188,12 @@ def build_rows(
     # Speaker id is whichever column is neither id, label nor attack and looks
     # like a speaker code. Useful for checking splits are speaker-disjoint.
     speaker_column = None
-    for candidate in range(min(len(row) for row in rows[:2000])):
+    speaker_sample = _spread_sample(rows, 2000)
+    for candidate in range(min(len(row) for row in speaker_sample)):
         if candidate in (id_column, label_column, attack_column):
             continue
-        values = {row[candidate] for row in rows[:2000]}
-        if 1 < len(values) < len(rows[:2000]) and all(
+        values = {row[candidate] for row in speaker_sample}
+        if 1 < len(values) < len(speaker_sample) and all(
             v.startswith(("LA_", "PA_", "DF_", "spk", "SPK")) for v in values
         ):
             speaker_column = candidate
