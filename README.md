@@ -37,7 +37,9 @@ synthetic-speech forensics
 | Anti-spoof model (wav2vec2 + log-Mel CNN fusion) | **trained — 2.95% EER** on ASVspoof 2019 LA eval |
 | Training + evaluation pipeline (EER / minDCF / DET) | working, [results/](results/) |
 | Temporal risk engine | working, thresholds uncalibrated |
-| Speaker verification (ECAPA-TDNN) | not started |
+| Speaker verification (ECAPA-TDNN) | **working — 0.373% EER** on 67 unseen speakers |
+| Risk fusion + policy engine | **working** — explainable 0-100 score, weights uncalibrated |
+| `/speakers/enroll`, `/speakers/verify`, `/analyze` | **working** |
 | Prosody / phase forensics | not started |
 | NLP transcript analysis, context engine, policy engine | not started |
 | Blockchain audit layer | not started |
@@ -48,8 +50,13 @@ attack types unseen in training — and 3.76 % miss at a 1 % false-alarm budget.
 Full numbers, the per-attack breakdown and the training-data ablation are in
 **[results/](results/README.md)**.
 
-The next gap is **speaker verification**: a real human impersonating someone
-passes an anti-spoof model, because nothing about their voice is synthetic.
+Speaker verification now closes the gap that anti-spoof cannot: a real human
+impersonating someone passes any deepfake detector, and only an identity check
+stops them. `POST /api/v1/analyze` takes audio plus a claimed identity and
+returns a fused risk score with reason codes.
+
+Remaining: prosody, NLP and contextual branches; the live dashboard; and the
+blockchain audit layer.
 
 ## Requirements
 

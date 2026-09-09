@@ -4,8 +4,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.analyze import router as analyze_router
 from app.api.calls import router as calls_router
 from app.api.health import router as health_router
+from app.api.speakers import router as speakers_router
 from app.config import settings
 from app.database import init_db
 
@@ -65,6 +67,14 @@ app.include_router(
 
 app.include_router(
     calls_router
+)
+
+app.include_router(
+    speakers_router
+)
+
+app.include_router(
+    analyze_router
 )
 
 

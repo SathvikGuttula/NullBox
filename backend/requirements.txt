@@ -25,6 +25,7 @@ pydantic-settings
 sqlalchemy
 asyncpg
 python-dotenv
+python-multipart   # file uploads on /speakers and /analyze
 
 # --- audio ---
 numpy
