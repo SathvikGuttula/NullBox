@@ -195,11 +195,22 @@ def minimum_dcf(
 
 def threshold_at_false_alarm(labels, scores, target_false_alarm: float) -> float:
     """
-    Lowest threshold whose false-alarm rate stays under ``target``.
+    The most permissive threshold whose false-alarm rate stays within budget.
 
     This is how a production threshold should actually be picked: decide how
-    many genuine callers you are willing to inconvenience, then accept
-    whatever miss rate that buys you.
+    many genuine callers you are willing to inconvenience, then accept whatever
+    miss rate that buys you.
+
+    "Most permissive" is the whole point, and getting it backwards is easy.
+    ``roc_curve`` returns thresholds in DESCENDING order, so index 0 is the
+    highest threshold - where nothing at all is flagged, false alarms are
+    trivially 0, and the miss rate is 100%. Taking the first acceptable index
+    therefore satisfies the constraint while detecting nothing, and reports a
+    useless operating point as though it were the answer.
+
+    The last acceptable index is the lowest threshold still inside the budget,
+    which is the one that catches the most attacks for the false alarms you
+    agreed to pay.
     """
 
     curve = det_curve(labels, scores)
@@ -210,9 +221,10 @@ def threshold_at_false_alarm(labels, scores, target_false_alarm: float) -> float
     acceptable = np.where(far <= target_false_alarm)[0]
 
     if acceptable.size == 0:
+        # Not even the strictest threshold meets the budget.
         return float(thresholds[0])
 
-    return float(thresholds[int(acceptable[0])])
+    return float(thresholds[int(acceptable[-1])])
 
 
 # ---------------------------------------------------------------------------

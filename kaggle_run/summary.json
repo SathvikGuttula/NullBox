@@ -1,0 +1,63 @@
+{
+  "best_eer": 0.0019623233908948193,
+  "best_epoch": 4,
+  "epochs_run": 5,
+  "history": [
+    {
+      "epoch": 1,
+      "stage": "frozen",
+      "train_loss": 0.4475856940690686,
+      "train_accuracy": 0.8073376418663304,
+      "seconds": 701.400659224,
+      "val_loss": 0.3122686301591774,
+      "val_eer": 0.06808396124865446,
+      "val_roc_auc": 0.9829616360496339,
+      "val_accuracy": 0.8953872162292706
+    },
+    {
+      "epoch": 2,
+      "stage": "finetune",
+      "train_loss": 0.2253188528449358,
+      "train_accuracy": 0.9481793820933165,
+      "seconds": 738.9204121359999,
+      "val_loss": 0.2250716582976253,
+      "val_eer": 0.00569608898457119,
+      "val_roc_auc": 0.9994930576561168,
+      "val_accuracy": 0.9461036870069232
+    },
+    {
+      "epoch": 3,
+      "stage": "finetune",
+      "train_loss": 0.15291520936266623,
+      "train_accuracy": 0.9842370744010088,
+      "seconds": 739.3682090419998,
+      "val_loss": 0.12534750664326214,
+      "val_eer": 0.0024219590958018955,
+      "val_roc_auc": 0.999866722895998,
+      "val_accuracy": 0.9965383996135888
+    },
+    {
+      "epoch": 4,
+      "stage": "finetune",
+      "train_loss": 0.13940462708698695,
+      "train_accuracy": 0.9900299495586381,
+      "seconds": 738.3675625619999,
+      "val_loss": 0.12515528288165267,
+      "val_eer": 0.0019623233908948193,
+      "val_roc_auc": 0.9997886823438493,
+      "val_accuracy": 0.9964981484463049
+    },
+    {
+      "epoch": 5,
+      "stage": "finetune",
+      "train_loss": 0.13546796535784178,
+      "train_accuracy": 0.9920397225725095,
+      "seconds": 738.1939641899999,
+      "val_loss": 0.12386371006414851,
+      "val_eer": 0.0019623233908948193,
+      "val_roc_auc": 0.9998538642914316,
+      "val_accuracy": 0.9971421671228465
+    }
+  ],
+  "checkpoint": "/kaggle/working/models/voxshield_full.pt"
+}

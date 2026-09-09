@@ -176,3 +176,65 @@ def test_single_class_does_not_crash():
 
     assert report["eer"] is None
     assert "warning" in report
+
+
+def test_threshold_at_false_alarm_is_the_permissive_one():
+    """
+    The regression that made every "at 1% false alarm" row read 100% miss.
+
+    roc_curve returns thresholds descending, so the FIRST index satisfying the
+    false-alarm budget is the highest threshold - where nothing is flagged,
+    false alarms are trivially zero and the miss rate is 100%. It satisfies the
+    constraint and detects nothing. The correct pick is the LAST acceptable
+    index: the lowest threshold still inside the budget.
+    """
+
+    rng = np.random.default_rng(21)
+
+    bonafide = rng.normal(0.05, 0.05, 8000).clip(0, 1)
+    spoof = rng.normal(0.85, 0.15, 8000).clip(0, 1)
+
+    labels = np.concatenate([np.zeros(8000, int), np.ones(8000, int)])
+    scores = np.concatenate([bonafide, spoof])
+
+    threshold = threshold_at_false_alarm(labels, scores, 0.01)
+
+    achieved_fa = float((bonafide >= threshold).mean())
+    achieved_miss = float((spoof < threshold).mean())
+
+    # Budget respected...
+    assert achieved_fa <= 0.011
+    # ...and the point is actually useful, which the old code was not.
+    assert achieved_miss < 0.20, (
+        f"miss rate {achieved_miss:.1%} - the threshold is too strict to be "
+        f"the intended operating point"
+    )
+
+
+def test_one_percent_far_row_is_not_degenerate():
+    """A separable problem must yield a usable 1%-FA operating point."""
+
+    rng = np.random.default_rng(22)
+
+    labels = np.concatenate([np.zeros(5000, int), np.ones(5000, int)])
+    scores = np.concatenate([
+        rng.normal(0.03, 0.04, 5000).clip(0, 1),
+        rng.normal(0.90, 0.12, 5000).clip(0, 1),
+    ])
+
+    report = calculate_metrics(labels, scores)
+    block = report["at_1pct_false_alarm"]
+
+    assert block["miss_rate"] < 0.20
+    assert block["recall"] > 0.80
+    assert block["false_alarm_rate"] <= 0.011
+
+
+def test_impossible_false_alarm_budget_falls_back_safely():
+    """If even the strictest threshold busts the budget, do not crash."""
+
+    labels = np.array([0, 0, 1, 1])
+    scores = np.array([0.9, 0.9, 0.9, 0.9])
+
+    threshold = threshold_at_false_alarm(labels, scores, 0.0)
+    assert np.isfinite(threshold)
