@@ -309,6 +309,30 @@ def peak_normalize(audio: np.ndarray, epsilon: float = 1e-8) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
+class _DecodeTask:
+    """
+    Picklable decode step for the parallel cache builder.
+
+    A module-level class rather than a closure or lambda, because Windows and
+    macOS spawn new interpreters for worker processes and can only send them
+    things that pickle by reference.
+    """
+
+    __slots__ = ("sample_rate", "max_samples")
+
+    def __init__(self, sample_rate: int, max_samples: int | None) -> None:
+        self.sample_rate = sample_rate
+        self.max_samples = max_samples
+
+    def __call__(self, path: str) -> np.ndarray:
+        audio = peak_normalize(read_audio(path, self.sample_rate))
+
+        if self.max_samples is not None and audio.shape[0] > self.max_samples:
+            audio = audio[: self.max_samples]
+
+        return audio.astype(np.float16)
+
+
 class WaveformStore:
     """
     A decoded corpus held as one flat float16 array plus an offset index.
@@ -422,13 +446,26 @@ class WaveformStore:
         sample_rate: int = 16000,
         max_seconds: float | None = None,
         progress=None,
+        workers: int = 0,
     ) -> "WaveformStore":
         """
         Decode every sample once and write the cache.
 
         ``max_seconds`` caps how much of each file is stored. Leave it at None
-        to keep the full clip so that random cropping still has room to move;
-        set it when disk is tight.
+        to keep the full clip so random cropping still has room to move; set it
+        when disk is tight.
+
+        ``workers`` decodes in parallel. FLAC decoding is pure CPU and embarrassingly
+        parallel, so on a many-core machine this is close to a linear speedup -
+        on a 32-core box, minutes become seconds. It stays off by default
+        because on a 4-core cloud runtime the process overhead is not worth it.
+
+        Order is preserved: ``imap`` yields results in submission order, so the
+        flat array and its offset index stay aligned with ``samples``. The
+        decoded arrays cross the process boundary rather than being written by
+        each worker - a few GB through a pipe costs seconds, while sharded
+        writes plus a concatenation pass would cost a full extra read of the
+        corpus.
         """
 
         root = Path(root)
@@ -444,23 +481,44 @@ class WaveformStore:
 
         cursor = 0
 
-        with data_path.open("wb") as handle:
-            for index, sample in enumerate(samples):
-                audio = read_audio(sample.path, sample_rate)
-                audio = peak_normalize(audio)
+        if workers and workers > 1:
+            import multiprocessing as mp
 
-                if max_samples is not None and audio.shape[0] > max_samples:
-                    audio = audio[:max_samples]
+            task = _DecodeTask(sample_rate, max_samples)
+            paths = [s.path for s in samples]
 
-                handle.write(audio.astype(np.float16).tobytes())
+            context = mp.get_context("spawn")
+            with context.Pool(processes=workers) as pool:
+                stream = pool.imap(task, paths, chunksize=16)
 
-                offsets[index] = cursor
-                lengths[index] = audio.shape[0]
-                labels[index] = sample.label
-                cursor += audio.shape[0]
+                with data_path.open("wb") as handle:
+                    for index, audio in enumerate(stream):
+                        handle.write(audio.tobytes())
+                        offsets[index] = cursor
+                        lengths[index] = audio.shape[0]
+                        labels[index] = samples[index].label
+                        cursor += audio.shape[0]
 
-                if progress is not None:
-                    progress.update(1)
+                        if progress is not None:
+                            progress.update(1)
+        else:
+            with data_path.open("wb") as handle:
+                for index, sample in enumerate(samples):
+                    audio = read_audio(sample.path, sample_rate)
+                    audio = peak_normalize(audio)
+
+                    if max_samples is not None and audio.shape[0] > max_samples:
+                        audio = audio[:max_samples]
+
+                    handle.write(audio.astype(np.float16).tobytes())
+
+                    offsets[index] = cursor
+                    lengths[index] = audio.shape[0]
+                    labels[index] = sample.label
+                    cursor += audio.shape[0]
+
+                    if progress is not None:
+                        progress.update(1)
 
         np.savez(
             root / WaveformStore.INDEX_NAME,

@@ -340,3 +340,63 @@ def test_incomplete_cache_directory_raises(tmp_path):
 
     with pytest.raises(FileNotFoundError, match="cache incomplete"):
         WaveformStore(tmp_path / "cache")
+
+
+# ---------------------------------------------------------------------------
+# parallel cache building
+# ---------------------------------------------------------------------------
+
+
+def test_parallel_cache_is_identical_to_serial(corpus, tmp_path):
+    """
+    The only thing that matters here: a faster builder that produces different
+    bytes is worse than a slow one. imap preserves submission order, so the
+    flat array and its offset index must line up exactly either way.
+    """
+
+    samples = load_manifest(corpus)
+
+    serial = WaveformStore.build(samples, tmp_path / "serial", workers=0)
+    parallel = WaveformStore.build(samples, tmp_path / "parallel", workers=2)
+
+    assert len(serial) == len(parallel)
+    assert np.array_equal(serial.offsets, parallel.offsets)
+    assert np.array_equal(serial.lengths, parallel.lengths)
+    assert np.array_equal(serial.labels, parallel.labels)
+
+    for index in range(len(samples)):
+        assert np.array_equal(serial.get(index), parallel.get(index)), (
+            f"clip {index} differs between serial and parallel builds"
+        )
+
+    # And the raw files themselves.
+    a = (tmp_path / "serial" / WaveformStore.DATA_NAME).read_bytes()
+    b = (tmp_path / "parallel" / WaveformStore.DATA_NAME).read_bytes()
+    assert a == b, "cache files are not byte-identical"
+
+
+def test_parallel_cache_preserves_order_with_varied_lengths(tmp_path):
+    """
+    Clips in the fixture have different durations, so a reordering would show
+    up as mismatched offsets rather than merely shuffled content.
+    """
+
+    import soundfile as sf
+
+    audio_dir = tmp_path / "audio"
+    audio_dir.mkdir()
+
+    samples = []
+    for index in range(12):
+        seconds = 0.5 + index * 0.3
+        t = np.linspace(0, seconds, int(16000 * seconds), endpoint=False)
+        path = audio_dir / f"clip_{index}.flac"
+        sf.write(path, (0.3 * np.sin(2 * np.pi * 200 * t)).astype(np.float32),
+                 16000, format="FLAC")
+        samples.append(AudioSample(path=str(path), label=index % 2))
+
+    store = WaveformStore.build(samples, tmp_path / "cache", workers=3)
+
+    # Lengths must increase monotonically, matching the order they were given.
+    lengths = [int(store.lengths[i]) for i in range(len(samples))]
+    assert lengths == sorted(lengths), "parallel build reordered the clips"

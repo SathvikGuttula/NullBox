@@ -83,6 +83,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument(
+        "--workers",
+        type=int,
+        default=0,
+        help="Decode in parallel. FLAC decoding is pure CPU and scales "
+             "almost linearly, so on a many-core machine this turns minutes "
+             "into seconds. 0 or 1 stays single-process. Try os.cpu_count().",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="Rebuild even if the cache directory already looks complete.",
@@ -98,6 +106,7 @@ def cache_one(
     max_seconds: float | None,
     limit: int | None,
     force: bool,
+    workers: int = 0,
 ) -> None:
     print(f"\n[{manifest.stem}]")
 
@@ -139,6 +148,7 @@ def cache_one(
             sample_rate=sample_rate,
             max_seconds=max_seconds or None,
             progress=progress,
+            workers=workers,
         )
 
     progress.close()
@@ -179,6 +189,7 @@ def main() -> None:
                 max_seconds,
                 args.limit,
                 args.force,
+                args.workers,
             )
 
         print(
@@ -204,6 +215,7 @@ def main() -> None:
         max_seconds,
         args.limit,
         args.force,
+        args.workers,
     )
 
 
