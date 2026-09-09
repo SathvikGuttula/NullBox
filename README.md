@@ -34,8 +34,8 @@ synthetic-speech forensics
 |---|---|
 | Backend API + websocket audio streaming | working |
 | Audio preprocessing, VAD, feature extraction | working |
-| Anti-spoof model (wav2vec2 + log-Mel CNN fusion) | implemented, **not yet trained** |
-| Training + evaluation pipeline (EER / minDCF / DET) | implemented, **awaiting dataset** |
+| Anti-spoof model (wav2vec2 + log-Mel CNN fusion) | **trained — 2.95% EER** on ASVspoof 2019 LA eval |
+| Training + evaluation pipeline (EER / minDCF / DET) | working, [results/](results/) |
 | Temporal risk engine | working, thresholds uncalibrated |
 | Speaker verification (ECAPA-TDNN) | not started |
 | Prosody / phase forensics | not started |
@@ -43,9 +43,13 @@ synthetic-speech forensics
 | Blockchain audit layer | not started |
 | Dashboard | scaffold only |
 
-Nothing blocks training any more: ASVspoof 2019 LA is a public Kaggle dataset,
-so it attaches with one click. See **[TRAINING.md](TRAINING.md)** and
-`notebooks/VoxShield_Kaggle_Training.ipynb`.
+**Current result: 2.95 % EER, ROC-AUC 0.986** on 71,237 utterances across 13
+attack types unseen in training — and 3.76 % miss at a 1 % false-alarm budget.
+Full numbers, the per-attack breakdown and the training-data ablation are in
+**[results/](results/README.md)**.
+
+The next gap is **speaker verification**: a real human impersonating someone
+passes an anti-spoof model, because nothing about their voice is synthetic.
 
 ## Requirements
 

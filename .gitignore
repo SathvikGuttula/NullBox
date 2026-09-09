@@ -66,3 +66,7 @@ models/*
 
 # Code bundle for Colab upload
 voxshield_code.zip
+
+# Per-utterance scores are large and regenerable from the model
+results/**/scores.csv
+kaggle_run/
