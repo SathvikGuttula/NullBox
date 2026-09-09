@@ -325,6 +325,103 @@ class SpeakerEncoder:
 # ---------------------------------------------------------------------------
 
 
+class LiveSpeakerTracker:
+    """
+    Rolling speaker verification over the course of a call.
+
+    Two things make this different from scoring one clip.
+
+    First, it re-embeds on a duty cycle rather than per analysis window.
+    Identity does not change mid-call, so running ECAPA every hop would burn
+    GPU for no new information.
+
+    Second, and more importantly, it accumulates the caller's embeddings into a
+    running centroid and compares *that* to the enrolled prototype, rather than
+    averaging per-window similarities. A three-second window is a noisy estimate
+    of a voice; ten seconds of accumulated speech is a much better one. Both
+    sides of the comparison are then prototypes built the same way, which is
+    what the enrolment maths assumes.
+
+    The confidence therefore improves as the call goes on, which is exactly the
+    behaviour a live risk display should have.
+    """
+
+    def __init__(
+        self,
+        registry: "SpeakerRegistry",
+        encoder,
+        identity: str,
+        sample_rate: int = 16000,
+        interval_seconds: float = 3.0,
+        max_embeddings: int = 20,
+    ) -> None:
+        self.registry = registry
+        self.encoder = encoder
+        self.identity = identity
+        self.sample_rate = sample_rate
+        self.interval_samples = int(sample_rate * interval_seconds)
+        self.max_embeddings = max_embeddings
+
+        self.buffer = np.zeros(0, dtype=np.float32)
+        self.embeddings: list[np.ndarray] = []
+        self.result: VerificationResult | None = None
+        self.updates = 0
+
+    @property
+    def speech_seconds(self) -> float:
+        """How much speech has gone into the current estimate."""
+
+        return len(self.embeddings) * self.interval_samples / self.sample_rate
+
+    def add_speech(self, audio: np.ndarray) -> VerificationResult | None:
+        """
+        Feed speech-only audio. Returns a fresh result when one was computed.
+
+        Only speech should reach this - embedding silence produces a vector
+        that says nothing about the speaker but still drags the centroid.
+        """
+
+        audio = np.asarray(audio, dtype=np.float32).reshape(-1)
+
+        if audio.size == 0:
+            return None
+
+        self.buffer = np.concatenate([self.buffer, audio])
+
+        if self.buffer.size < self.interval_samples:
+            return None
+
+        window = self.buffer[: self.interval_samples]
+        self.buffer = self.buffer[self.interval_samples :]
+
+        try:
+            embedding = self.encoder.embed(window, self.sample_rate)
+        except Exception:
+            return None
+
+        self.embeddings.append(embedding)
+
+        # Keep the most recent N. A caller who hands the phone to someone else
+        # should eventually be scored as that someone else, not as an average
+        # of both for the rest of the call.
+        if len(self.embeddings) > self.max_embeddings:
+            self.embeddings = self.embeddings[-self.max_embeddings :]
+
+        self.updates += 1
+        self.result = self.registry.verify(self.identity, centroid(self.embeddings))
+
+        return self.result
+
+    def to_dict(self) -> dict | None:
+        if self.result is None:
+            return None
+
+        data = self.result.to_dict()
+        data["speech_seconds_analysed"] = round(self.speech_seconds, 1)
+        data["updates"] = self.updates
+        return data
+
+
 class SpeakerRegistry:
     """
     Enrolled speakers and the verification decision.

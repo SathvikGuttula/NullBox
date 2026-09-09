@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, WebSocket
+from fastapi import APIRouter, Query, WebSocket
 
 from app.websocket.audio_stream import (
     audio_stream_manager,
@@ -29,11 +29,18 @@ async def create_demo_call():
 async def audio_stream(
     websocket: WebSocket,
     call_id: str,
+    claimed_identity: str | None = Query(
+        None,
+        description="Who the caller says they are. Enables the speaker "
+                    "verification branch; without it the stream is anti-spoof "
+                    "only and says so.",
+    ),
 ):
 
     await audio_stream_manager.connect(
         call_id,
         websocket,
+        claimed_identity=claimed_identity,
     )
 
     await audio_stream_manager.process_stream(

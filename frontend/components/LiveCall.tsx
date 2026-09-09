@@ -48,6 +48,25 @@ interface Analysis {
       model_status: string;
     };
   };
+
+  speaker?: {
+    identity: string;
+    similarity: number;
+    decision: string;
+    calibrated: boolean;
+    speech_seconds_analysed?: number;
+    reasons: string[];
+  } | null;
+
+  risk?: {
+    risk_score: number;
+    risk_level: string;
+    decision: string;
+    reasons: string[];
+    available_signals: string[];
+    missing_signals: string[];
+    calibrated: boolean;
+  } | null;
 }
 
 interface ServerMessage {
@@ -67,6 +86,28 @@ export default function LiveCall({
 
   const [analysis, setAnalysis] =
     useState<Analysis | null>(null);
+
+  const [riskScore, setRiskScore] =
+    useState<number>(0);
+
+  const [riskLevel, setRiskLevel] =
+    useState<string>("LOW");
+
+  const [decision, setDecision] =
+    useState<string>("ALLOW");
+
+  const [reasons, setReasons] =
+    useState<string[]>([]);
+
+  const [
+    speakerSimilarity,
+    setSpeakerSimilarity,
+  ] = useState<number | null>(null);
+
+  const [
+    speakerDecision,
+    setSpeakerDecision,
+  ] = useState<string | null>(null);
 
   const [deepfakeScore, setDeepfakeScore] =
     useState<number | null>(null);
@@ -195,7 +236,29 @@ export default function LiveCall({
                 );
               }
 
-              onRiskUpdate?.(5);
+              // The fused score, not a placeholder. It only exists once at
+              // least one branch has reported, so leave the previous value
+              // standing rather than flashing 0 between updates.
+              const risk = message.analysis.risk;
+
+              if (risk) {
+                setRiskScore(risk.risk_score);
+                setRiskLevel(risk.risk_level);
+                setDecision(risk.decision);
+                setReasons(risk.reasons ?? []);
+                onRiskUpdate?.(risk.risk_score);
+              }
+
+              const speaker = message.analysis.speaker;
+
+              if (speaker) {
+                setSpeakerSimilarity(
+                  speaker.similarity
+                );
+                setSpeakerDecision(
+                  speaker.decision
+                );
+              }
             }
           } catch (err) {
             console.error(
@@ -590,6 +653,176 @@ export default function LiveCall({
               </strong>
             </div>
           </div>
+
+          {analysis.risk && (
+            <div
+              style={{
+                marginTop: 16,
+                padding: 14,
+                background: "#080b10",
+                borderRadius: 10,
+                border: `1px solid ${
+                  riskLevel === "HIGH"
+                    ? "#7f1d1d"
+                    : riskLevel ===
+                      "SUSPICIOUS"
+                    ? "#78350f"
+                    : "#14532d"
+                }`,
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent:
+                    "space-between",
+                  alignItems:
+                    "baseline",
+                }}
+              >
+                <span
+                  style={{
+                    fontSize: 11,
+                    color: "#6b7280",
+                    letterSpacing: 1,
+                  }}
+                >
+                  VOXSHIELD RISK
+                </span>
+
+                <span
+                  style={{
+                    fontSize: 11,
+                    color:
+                      riskLevel ===
+                      "HIGH"
+                        ? "#fca5a5"
+                        : riskLevel ===
+                          "SUSPICIOUS"
+                        ? "#fcd34d"
+                        : "#86efac",
+                    letterSpacing: 1,
+                  }}
+                >
+                  {riskLevel}
+                </span>
+              </div>
+
+              <div
+                style={{
+                  fontSize: 34,
+                  fontWeight: 700,
+                  marginTop: 6,
+                }}
+              >
+                {riskScore.toFixed(0)}
+                <span
+                  style={{
+                    fontSize: 15,
+                    color: "#6b7280",
+                  }}
+                >
+                  {" "}
+                  / 100
+                </span>
+              </div>
+
+              <div
+                style={{
+                  fontSize: 13,
+                  color: "#9ca3af",
+                  marginTop: 2,
+                }}
+              >
+                {decision.replace(
+                  /_/g,
+                  " "
+                )}
+              </div>
+
+              {speakerSimilarity !==
+                null && (
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent:
+                      "space-between",
+                    marginTop: 12,
+                    fontSize: 13,
+                  }}
+                >
+                  <span>
+                    Identity match
+                  </span>
+                  <strong>
+                    {speakerSimilarity.toFixed(
+                      2
+                    )}{" "}
+                    <span
+                      style={{
+                        color:
+                          "#6b7280",
+                      }}
+                    >
+                      {speakerDecision}
+                    </span>
+                  </strong>
+                </div>
+              )}
+
+              {reasons.length > 0 && (
+                <ul
+                  style={{
+                    margin: "12px 0 0",
+                    paddingLeft: 18,
+                    fontSize: 12,
+                    color: "#d1d5db",
+                    lineHeight: 1.6,
+                  }}
+                >
+                  {reasons.map(
+                    (reason, i) => (
+                      <li key={i}>
+                        {reason}
+                      </li>
+                    )
+                  )}
+                </ul>
+              )}
+
+              {analysis.risk
+                .missing_signals
+                .length > 0 && (
+                <div
+                  style={{
+                    marginTop: 10,
+                    fontSize: 11,
+                    color: "#6b7280",
+                  }}
+                >
+                  Not yet contributing:{" "}
+                  {analysis.risk.missing_signals.join(
+                    ", "
+                  )}
+                </div>
+              )}
+
+              {!analysis.risk
+                .calibrated && (
+                <div
+                  style={{
+                    marginTop: 8,
+                    fontSize: 11,
+                    color: "#fcd34d",
+                  }}
+                >
+                  Fusion weights are
+                  uncalibrated
+                  placeholders.
+                </div>
+              )}
+            </div>
+          )}
         </>
       )}
 

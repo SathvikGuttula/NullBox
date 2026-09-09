@@ -20,6 +20,7 @@ class AudioStreamManager:
         self,
         call_id: str,
         websocket: WebSocket,
+        claimed_identity: str | None = None,
     ):
 
         await websocket.accept()
@@ -28,10 +29,14 @@ class AudioStreamManager:
             call_id
         ] = websocket
 
+        # The claimed identity is fixed for the life of the call. Letting it
+        # change mid-stream would let a caller re-aim the identity check at
+        # whichever profile happened to match.
         self.pipelines[
             call_id
         ] = AudioFeaturePipeline(
             sample_rate=16000,
+            claimed_identity=claimed_identity,
         )
 
     async def disconnect(
