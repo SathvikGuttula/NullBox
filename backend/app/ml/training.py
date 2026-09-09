@@ -116,8 +116,18 @@ def resolve_precision(requested: str, device: str) -> tuple[bool, torch.dtype | 
         return True, torch.bfloat16
 
     # auto
-    if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
-        return True, torch.bfloat16
+    #
+    # Do NOT trust torch.cuda.is_bf16_supported() here. It returns True on
+    # Turing (sm_75, e.g. a Kaggle T4) because PyTorch counts *emulated* bf16 as
+    # supported. Emulated bf16 bypasses the fp16 tensor cores and is markedly
+    # slower than fp16 on exactly the hardware where it reports True.
+    #
+    # Native bf16 arrives with Ampere (sm_80). Below that, fp16 + GradScaler is
+    # both faster and the only path through the tensor cores.
+    if torch.cuda.is_available():
+        major, _ = torch.cuda.get_device_capability()
+        if major >= 8:
+            return True, torch.bfloat16
 
     return True, torch.float16
 

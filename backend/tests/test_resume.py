@@ -202,3 +202,55 @@ def test_stage_is_carried_across_resume(tmp_path):
 
     restored.load_resume_state(path)
     assert restored.stage == "finetune"
+
+
+# ---------------------------------------------------------------------------
+# precision selection
+# ---------------------------------------------------------------------------
+
+
+def test_bf16_only_on_ampere_and_newer(monkeypatch):
+    """
+    torch.cuda.is_bf16_supported() returns True on Turing (sm_75) because
+    PyTorch counts *emulated* bf16 as supported. A Kaggle T4 reports bf16 True
+    and then runs it far slower than fp16, because emulation bypasses the fp16
+    tensor cores. Native bf16 starts at Ampere (sm_80).
+    """
+
+    from app.ml import training
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+
+    # T4 / Turing
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda *a: (7, 5))
+    enabled, dtype = training.resolve_precision("auto", "cuda")
+    assert enabled and dtype is torch.float16, "T4 must use fp16, not emulated bf16"
+
+    # P100 / Pascal
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda *a: (6, 0))
+    assert training.resolve_precision("auto", "cuda")[1] is torch.float16
+
+    # RTX 3050 / Ampere
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda *a: (8, 6))
+    assert training.resolve_precision("auto", "cuda")[1] is torch.bfloat16
+
+    # H100 / Hopper
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda *a: (9, 0))
+    assert training.resolve_precision("auto", "cuda")[1] is torch.bfloat16
+
+
+def test_explicit_precision_is_respected(monkeypatch):
+    from app.ml import training
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda *a: (8, 6))
+
+    assert training.resolve_precision("fp16", "cuda")[1] is torch.float16
+    assert training.resolve_precision("bf16", "cuda")[1] is torch.bfloat16
+    assert training.resolve_precision("fp32", "cuda") == (False, None)
+
+
+def test_cpu_never_uses_amp():
+    from app.ml import training
+
+    assert training.resolve_precision("auto", "cpu") == (False, None)
