@@ -39,6 +39,10 @@ soundfile
 # renames it the masked-pooling path degrades SILENTLY to no mask rather
 # than raising. Re-test that path before lifting the ceiling.
 transformers>=4.44,<5
+# Speaker verification (Phase 4): pretrained ECAPA-TDNN.
+# On Windows it must fetch with LocalStrategy.COPY - the default
+# symlink strategy needs administrator rights or Developer Mode.
+speechbrain>=1.0
 scikit-learn
 pandas
 tqdm
