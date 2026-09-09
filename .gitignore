@@ -70,7 +70,11 @@ voxshield_code.zip
 # Per-utterance scores are large and regenerable from the model
 results/**/scores.csv
 kaggle_run/
-models/ecapa/
+# Pretrained encoder caches - downloaded on demand, never committed.
+# Matched at any depth: SpeechBrain writes relative to the CWD, so it
+# lands in backend/models/ when tests run from there.
+**/models/ecapa/
+backend/models/
 
 # speaker thresholds live in results/ as the record of record
 models/speaker_thresholds.json
