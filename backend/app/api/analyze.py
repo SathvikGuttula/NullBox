@@ -22,8 +22,10 @@ from starlette.concurrency import run_in_threadpool
 
 from app.api.speakers import decode_upload, get_registry
 from app.ml.config import DetectorConfig
+from app.ml.context import CallContext, ContextAnalyzer
 from app.ml.detector import VoiceSpoofDetector
 from app.ml.fusion import RiskFusion
+from app.ml.policy import PolicyEngine
 from app.ml.speaker import SpeakerEncoder
 
 logger = logging.getLogger("voxshield.analyze")
@@ -31,12 +33,21 @@ logger = logging.getLogger("voxshield.analyze")
 router = APIRouter(prefix="/api/v1", tags=["Analysis"])
 
 _fusion = RiskFusion()
+_context = ContextAnalyzer()
+_policy = PolicyEngine()
 
 
 @router.post("/analyze")
 async def analyze(
     sample: UploadFile = File(...),
     claimed_identity: str | None = Form(None),
+    context: str | None = Form(
+        None,
+        description='Call metadata as a JSON object, e.g. {"caller_known": '
+                    'false, "transaction_amount": 50000}. Any subset of '
+                    "CallContext's fields; anything omitted is treated as "
+                    '"not collected" rather than as safe.',
+    ),
 ) -> dict:
     """
     Score one recording on every branch that is available.
@@ -81,12 +92,50 @@ async def analyze(
         except Exception as exc:
             logger.warning("speaker verification failed: %s", exc)
 
+    # -- call context -------------------------------------------------------
+
+    assessment = None
+    call_context = CallContext()
+
+    if context:
+        import json
+
+        try:
+            fields = json.loads(context)
+            if not isinstance(fields, dict):
+                raise ValueError("context must be a JSON object")
+
+            known = set(vars(CallContext()))
+            unknown = set(fields) - known
+            if unknown:
+                raise HTTPException(
+                    400,
+                    f"unknown context fields: {sorted(unknown)}. "
+                    f"Accepted: {sorted(known)}",
+                )
+
+            call_context = CallContext(**fields)
+            assessment = _context.assess(call_context)
+        except HTTPException:
+            raise
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(400, f"could not parse context: {exc}") from exc
+
     # -- fuse ---------------------------------------------------------------
 
     risk = _fusion.fuse(
         spoof_probability=spoof_probability,
         speaker_similarity=verification["similarity"] if verification else None,
         speaker_decision=verification["decision"] if verification else None,
+        context_score=assessment.risk if assessment else None,
+    )
+
+    policy = _policy.decide(
+        risk_decision=risk.decision,
+        risk_score=risk.risk_score,
+        transaction_amount=call_context.transaction_amount,
+        identity_decision=verification["decision"] if verification else None,
+        calibrated_inputs=risk.to_dict()["calibrated"],
     )
 
     notes = []
@@ -113,6 +162,8 @@ async def analyze(
             "model_status": spoof_status,
         },
         "speaker": verification,
+        "context": assessment.to_dict() if assessment else None,
         "risk": risk.to_dict(),
+        "policy": policy.to_dict(),
         "notes": notes,
     }
