@@ -53,6 +53,16 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output", type=Path, default=Path("models/speaker_thresholds.json"))
+    parser.add_argument(
+        "--apply",
+        type=Path,
+        default=None,
+        help="Load thresholds calibrated elsewhere and report the error rates "
+             "they actually achieve on THIS manifest. Calibrate on one speaker "
+             "set and apply to another - quoting rates from the same speakers "
+             "you tuned on is the speaker-verification version of reporting "
+             "validation EER.",
+    )
     parser.add_argument("--enroll-samples", type=int, default=5)
     parser.add_argument("--nontarget-per-probe", type=int, default=4)
     parser.add_argument("--max-probes", type=int, default=20,
@@ -185,6 +195,37 @@ def main() -> None:
 
     print("=" * 70)
     print()
+
+    # -- do thresholds from elsewhere still hold here? ----------------------
+
+    if args.apply and args.apply.exists():
+        borrowed = json.loads(args.apply.read_text(encoding="utf-8"))
+
+        print()
+        print("=" * 70)
+        print(f"  THRESHOLDS FROM {args.apply} APPLIED TO THESE SPEAKERS")
+        print("=" * 70)
+        print(f"  {'mode':<16}{'match':>9}{'false accept':>16}{'false reject':>16}")
+
+        target_mask = labels == 1
+        nontarget_mask = labels == 0
+
+        for name, mode in borrowed.get("modes", {}).items():
+            threshold = float(mode["match"])
+            false_accept = float((scores[nontarget_mask] >= threshold).mean())
+            false_reject = float((scores[target_mask] < threshold).mean())
+            print(
+                f"  {name:<16}{threshold:>9.4f}"
+                f"{false_accept * 100:>15.2f}%{false_reject * 100:>15.2f}%"
+            )
+
+        print("=" * 70)
+        print()
+        print("  If these rates are close to the ones the calibration targeted,")
+        print("  the thresholds transfer. If they are far off, the two speaker")
+        print("  sets differ enough that a single threshold cannot serve both -")
+        print("  which is exactly what you need to know before deploying one.")
+        print()
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result.to_dict(), indent=2), encoding="utf-8")
