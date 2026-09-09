@@ -71,3 +71,6 @@ voxshield_code.zip
 results/**/scores.csv
 kaggle_run/
 models/ecapa/
+
+# speaker thresholds live in results/ as the record of record
+models/speaker_thresholds.json

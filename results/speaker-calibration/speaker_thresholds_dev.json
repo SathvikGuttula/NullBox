@@ -1,0 +1,49 @@
+{
+  "eer": 0.00375,
+  "eer_percent": 0.375,
+  "eer_threshold": 0.4422152963816941,
+  "targets": 600,
+  "nontargets": 2400,
+  "speakers": 20,
+  "encoder": "speechbrain/spkrec-ecapa-voxceleb",
+  "created_at": "2026-09-09T20:16:21.932274+00:00",
+  "modes": {
+    "high_security": {
+      "match": 0.5073808198345627,
+      "no_match": 0.32713465985846396,
+      "version": "v1-20260909-high-security"
+    },
+    "balanced": {
+      "match": 0.4422152963816941,
+      "no_match": 0.32713465985846396,
+      "version": "v1-20260909-balanced"
+    },
+    "low_friction": {
+      "match": 0.4422152963816941,
+      "no_match": 0.32713465985846396,
+      "version": "v1-20260909-low-friction"
+    }
+  },
+  "operating_points": {
+    "high_security": {
+      "threshold": 0.5073808198345627,
+      "false_accept_rate": 0.0004166666666666667,
+      "false_reject_rate": 0.013333333333333334
+    },
+    "balanced": {
+      "threshold": 0.4422152963816941,
+      "false_accept_rate": 0.00375,
+      "false_reject_rate": 0.005
+    },
+    "low_friction": {
+      "threshold": 0.4422152963816941,
+      "false_accept_rate": 0.00375,
+      "false_reject_rate": 0.005
+    },
+    "no_match_floor": {
+      "threshold": 0.32713465985846396,
+      "false_accept_rate": 0.03791666666666667,
+      "false_reject_rate": 0.0
+    }
+  }
+}

@@ -239,28 +239,47 @@ def calibrate(
 
     eer, eer_threshold = equal_error_rate(labels, scores)
 
-    # threshold_at_false_alarm treats label 0 as the class that raises false
-    # alarms, which here is the impostor - exactly the false-accept rate.
-    far_target = threshold_at_false_alarm(labels, scores, 0.001)
-    frr_target = _threshold_at_false_reject(labels, scores, 0.01)
-    frr_floor = _threshold_at_false_reject(labels, scores, 0.001)
+    # All three modes are parameterised on the SAME axis - the false-accept
+    # budget - and differ only in how much of it they will spend. That is what
+    # makes them comparable, and it is what an operator is actually choosing
+    # between: how many impostors am I willing to let through in exchange for
+    # troubling fewer genuine callers?
+    #
+    #   high_security   spend LESS than the balance point   strictest
+    #   balanced        the EER point                       errors split evenly
+    #   low_friction    spend MORE than the balance point   most permissive
+    #
+    # The budgets are defined RELATIVE to the measured EER, not as fixed rates.
+    # A fixed rate cannot bracket an unknown EER: 1% false accept is permissive
+    # for a system with a 3% EER and strict for one with a 0.3% EER, so a fixed
+    # pair silently collapses onto the balance point on one side or the other
+    # depending on how good the model turned out to be. Both real calibration
+    # runs hit exactly that - low_friction came out identical to balanced.
+    #
+    # Anchoring to the EER and an absolute floor keeps the three modes
+    # meaningfully distinct across the whole range of model quality, while
+    # still refusing to call anything "high security" if it admits more than
+    # 0.1% of impostors.
+    strict_budget = min(0.001, eer / 3.0) if eer > 0 else 0.001
+    lenient_budget = max(0.01, eer * 3.0)
 
-    # The ordering high_security >= balanced >= low_friction must be ENFORCED,
-    # not assumed to fall out of the error-rate targets.
-    #
-    # When the two classes separate well, both targets are satisfied on the
-    # same side of the EER point and the raw thresholds can come out in the
-    # wrong order - a "high security" mode that is more permissive than
-    # "balanced" would be actively dangerous, since the name is what an
-    # operator selects on.
-    #
-    # Clamping against the EER point makes the guarantee structural. On very
-    # separable data the three modes collapse to the same threshold, which is
-    # the honest outcome: if the system is that good, the operating modes
-    # genuinely coincide and there is nothing to trade.
-    strict = max(far_target, eer_threshold)
-    lenient = min(frr_target, eer_threshold)
-    floor = min(frr_floor, lenient)
+    strict = threshold_at_false_alarm(labels, scores, strict_budget)
+    lenient = threshold_at_false_alarm(labels, scores, lenient_budget)
+
+    # no_match is a different question - "is this confidently NOT the person?"
+    # - so it comes off the target distribution: a score low enough that
+    # genuine speakers essentially never reach it.
+    floor = _threshold_at_false_reject(labels, scores, 0.005)
+
+    # Enforce the ordering rather than assume it. When the classes separate
+    # very well every budget is satisfied at once and the raw thresholds can
+    # come out in any order - a "high security" mode more permissive than
+    # "balanced" would be actively dangerous, since the mode name is what an
+    # operator selects on. Where they genuinely coincide, they collapse, which
+    # is the honest outcome.
+    strict = max(strict, eer_threshold)
+    lenient = min(lenient, eer_threshold)
+    floor = min(floor, lenient)
 
     stamp = version_tag or datetime.now(timezone.utc).strftime("%Y%m%d")
 

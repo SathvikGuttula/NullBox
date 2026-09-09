@@ -334,3 +334,60 @@ def test_tighter_budget_gives_a_lower_threshold():
     assert _threshold_at_false_reject(labels, scores, 0.001) <= (
         _threshold_at_false_reject(labels, scores, 0.05)
     )
+
+
+def test_low_friction_is_actually_more_permissive_than_balanced():
+    """
+    The regression from the first real calibration run.
+
+    low_friction was derived from a false-REJECT budget, which inverts it:
+    allowing more genuine rejections permits a STRICTER threshold. So
+    "low friction" came out at least as strict as "balanced" and collapsed
+    onto it - both the dev and eval runs produced identical thresholds for the
+    two modes, leaving no low-friction option at all.
+
+    All three modes now sit on the false-accept axis and differ only in how
+    much of that budget they spend.
+    """
+
+    # Overlapping enough that the budgets genuinely separate.
+    rng = np.random.default_rng(5)
+    base = l2_normalize(rng.normal(size=DIM))
+
+    embeddings, by_speaker = [], {}
+    for s in range(14):
+        anchor = l2_normalize(base + 0.40 * l2_normalize(rng.normal(size=DIM)))
+        indices = []
+        for _ in range(30):
+            indices.append(len(embeddings))
+            embeddings.append(
+                l2_normalize(anchor + 1.10 * l2_normalize(rng.normal(size=DIM)))
+            )
+        by_speaker[f"spk{s:02d}"] = indices
+
+    embeddings = np.stack(embeddings)
+    trial_set = build_trials(by_speaker, enroll_samples=5)
+    labels, scores = score_trials(trial_set, embeddings)
+
+    result = calibrate(labels, scores)
+
+    assert result.eer > 0.005, "fixture too separable to distinguish the modes"
+
+    strict = result.modes["high_security"].match
+    balanced = result.modes["balanced"].match
+    lenient = result.modes["low_friction"].match
+
+    assert strict > lenient, "high_security must be stricter than low_friction"
+    assert lenient < balanced, (
+        "low_friction must be MORE PERMISSIVE than balanced, not equal to it"
+    )
+
+    points = result.operating_points
+    assert (
+        points["low_friction"]["false_reject_rate"]
+        < points["high_security"]["false_reject_rate"]
+    ), "low friction means fewer genuine callers turned away"
+    assert (
+        points["low_friction"]["false_accept_rate"]
+        > points["high_security"]["false_accept_rate"]
+    ), "and that is paid for with more impostors admitted"
