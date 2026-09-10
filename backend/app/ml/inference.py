@@ -22,10 +22,11 @@ from __future__ import annotations
 
 import numpy as np
 
+from app.audio.speech_check import assess_speech
 from app.ml.calibration import ProbabilityCalibrator
 from app.ml.config import DetectorConfig
 from app.ml.detector import VoiceSpoofDetector
-from app.ml.risk import TemporalRiskEngine
+from app.ml.risk import RiskThresholds, TemporalRiskEngine
 
 
 class StreamingInferenceEngine:
@@ -67,6 +68,11 @@ class StreamingInferenceEngine:
         # arrived - a second counter can only disagree with it.
         self.buffer = np.zeros(0, dtype=np.float32)
 
+        # Deliberately the identity by default. Calibration is applied once,
+        # inside VoiceSpoofDetector.predict, so that every consumer sees the
+        # same number; calibrating again here would square the map and push
+        # every score to an extreme. This hook stays for tests that drive the
+        # engine with a stub detector emitting deliberately raw scores.
         self.calibrator = calibrator or ProbabilityCalibrator()
 
         alpha = (
@@ -75,7 +81,18 @@ class StreamingInferenceEngine:
             else config.smoothing_alpha
         )
 
-        self.risk = risk_engine or TemporalRiskEngine(smoothing_alpha=alpha)
+        # The config's thresholds used to be dead: nothing read them, and the
+        # live risk levels came from RiskThresholds' own defaults of 60/85.
+        # They are derived from the DET curve now (see DetectorConfig), and
+        # the score they grade is a smoothed probability scaled to 0-100.
+        self.risk = risk_engine or TemporalRiskEngine(
+            smoothing_alpha=alpha,
+            thresholds=RiskThresholds(
+                suspicious=config.suspicious_threshold * 100.0,
+                high=config.high_risk_threshold * 100.0,
+                version="v1-derived-from-la-eval-det",
+            ),
+        )
 
         self.windows_scored = 0
 
@@ -114,9 +131,37 @@ class StreamingInferenceEngine:
     # -- scoring -----------------------------------------------------------
 
     def _infer(self, window: np.ndarray) -> dict:
-        raw = self.detector.predict(window, self.sample_rate)
+        # The energy VAD upstream is not enough on its own: measured, it
+        # passes 31 of 31 white-noise chunks as speech, and the detector then
+        # calls that noise synthetic with 0.997 confidence. Check the window
+        # actually carries speech before asking a speech model about it.
+        presence = assess_speech(window, self.sample_rate)
 
-        probability = float(raw.get("synthetic_probability", 0.0))
+        if not presence.has_speech:
+            self.windows_scored += 1
+
+            # Report the state that stands, and do NOT feed the risk engine -
+            # a window with no speech in it is not evidence of anything, and
+            # smoothing it in as a zero would read as "confirmed genuine".
+            return {
+                "synthetic_probability": None,
+                "raw_probability": None,
+                "smoothed_probability": round(self.risk.smoothed, 4),
+                "risk_score": round(self.risk.smoothed * 100.0, 2),
+                "risk_level": self.risk.level,
+                "reasons": [f"Not scored: {presence.reason}"],
+                "confidence": 0.0,
+                "model_status": "no_speech",
+                "speech_check": presence.to_dict(),
+                "window_seconds": round(window.size / self.sample_rate, 3),
+                "window_index": self.windows_scored,
+            }
+
+        result = self.detector.predict(window, self.sample_rate)
+
+        # The detector already calibrated this. self.calibrator is the identity
+        # unless a test injected one, so this is a no-op in production.
+        probability = float(result.get("synthetic_probability", 0.0))
         calibrated = self.calibrator.calibrate(probability)
 
         risk = self.risk.update(calibrated)
@@ -125,13 +170,19 @@ class StreamingInferenceEngine:
 
         return {
             "synthetic_probability": round(calibrated, 4),
-            "raw_probability": round(probability, 4),
+            # What the checkpoint actually emitted, before calibration. A
+            # stub detector in a test may not report one; fall back to the
+            # value we were given rather than inventing a zero.
+            "raw_probability": round(
+                float(result.get("raw_probability", probability)), 4
+            ),
             "smoothed_probability": risk["smoothed_probability"],
             "risk_score": risk["risk_score"],
             "risk_level": risk["risk_level"],
             "reasons": risk["reasons"],
-            "confidence": round(float(raw.get("confidence", 0.0)), 4),
-            "model_status": raw.get("model_status", "unknown"),
+            "confidence": round(float(result.get("confidence", 0.0)), 4),
+            "model_status": result.get("model_status", "unknown"),
+            "speech_check": presence.to_dict(),
             "window_seconds": round(window.size / self.sample_rate, 3),
             "window_index": self.windows_scored,
         }

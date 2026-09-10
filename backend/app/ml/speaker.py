@@ -41,12 +41,16 @@ this needs — before quoting any decision behaviour.
 from __future__ import annotations
 
 import json
+import logging
+import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
 
+
+logger = logging.getLogger("voxshield.speaker")
 
 EMBEDDING_DIM = 192
 
@@ -435,6 +439,49 @@ class SpeakerRegistry:
     RECOMMENDED_SAMPLES = 5
     MINIMUM_CONSISTENCY = 0.45
 
+    # An identity is an account reference, and it ends up in URL paths
+    # (DELETE /api/v1/speakers/{identity}), in log lines and on screen.
+    # Unvalidated, a live registry accumulated entries like
+    # "../../../../tmp/pwned" and a 5,000-character name - both accepted,
+    # stored and served back. Nothing today writes a file per identity, so the
+    # traversal string was inert, but "inert until someone adds per-identity
+    # storage" is not a property worth relying on.
+    MAXIMUM_IDENTITY_LENGTH = 128
+    _IDENTITY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._@-]*$")
+
+    @classmethod
+    def validate_identity(cls, identity: str) -> str:
+        """
+        Return the cleaned identity, or raise ``ValueError`` explaining why not.
+
+        An allowlist rather than a denylist: the set of characters a legitimate
+        account reference needs is small and knowable, and the set of ways to
+        smuggle a path separator through a denylist is not.
+        """
+
+        if not isinstance(identity, str):
+            raise ValueError("identity must be text")
+
+        cleaned = identity.strip()
+
+        if not cleaned:
+            raise ValueError("identity must not be empty")
+
+        if len(cleaned) > cls.MAXIMUM_IDENTITY_LENGTH:
+            raise ValueError(
+                f"identity is {len(cleaned)} characters; the limit is "
+                f"{cls.MAXIMUM_IDENTITY_LENGTH}"
+            )
+
+        if not cls._IDENTITY_PATTERN.match(cleaned):
+            raise ValueError(
+                "identity may contain only letters, digits, spaces and the "
+                "characters . _ @ - and must start with a letter or digit. "
+                f"Got {identity!r}."
+            )
+
+        return cleaned
+
     def __init__(
         self,
         thresholds: SpeakerThresholds | None = None,
@@ -464,6 +511,8 @@ class SpeakerRegistry:
         prototype is not a one-off error, it is a permanently weakened account
         that quietly matches the wrong people.
         """
+
+        identity = self.validate_identity(identity)
 
         if len(embeddings) < self.MINIMUM_SAMPLES:
             raise ValueError(
@@ -618,13 +667,38 @@ class SpeakerRegistry:
 
         data = json.loads(path.read_text(encoding="utf-8"))
 
-        if "thresholds" in data:
-            self.thresholds = SpeakerThresholds(**data["thresholds"])
+        # The store records which thresholds the profiles were enrolled under.
+        # That is provenance, not policy: it used to overwrite self.thresholds,
+        # which meant a stale store silently replaced the calibrated thresholds
+        # the caller had just loaded from disk. Each profile already carries
+        # its own threshold_version, so nothing is lost by ignoring it here.
+        self.enrolled_under = data.get("thresholds")
 
-        self.profiles = {
-            entry["identity"]: SpeakerProfile.from_dict(entry)
-            for entry in data.get("profiles", [])
-        }
+        self.profiles = {}
+        self.rejected: list[tuple[str, str]] = []
+
+        for entry in data.get("profiles", []):
+            identity = entry.get("identity", "")
+            try:
+                cleaned = self.validate_identity(identity)
+            except ValueError as exc:
+                # Written before identities were validated. Skipping is not
+                # data loss: the file is left untouched until something saves,
+                # and an entry that can no longer be created should not keep
+                # working just because it predates the rule.
+                self.rejected.append((str(identity)[:60], str(exc)))
+                continue
+
+            entry = {**entry, "identity": cleaned}
+            self.profiles[cleaned] = SpeakerProfile.from_dict(entry)
+
+        if self.rejected:
+            logger.warning(
+                "%d stored profile(s) have identities that are no longer valid "
+                "and were skipped: %s",
+                len(self.rejected),
+                ", ".join(name for name, _ in self.rejected),
+            )
 
     def __len__(self) -> int:
         return len(self.profiles)

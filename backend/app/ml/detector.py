@@ -19,14 +19,18 @@ Three things this layer is responsible for and the raw model is not:
 
 from __future__ import annotations
 
+import logging
 import threading
 from pathlib import Path
 
 import numpy as np
 import torch
 
+from app.ml.calibration import ProbabilityCalibrator
 from app.ml.config import DetectorConfig, resolve_path
 from app.ml.model import AntiSpoofInference, AntiSpoofModel
+
+logger = logging.getLogger("voxshield.detector")
 
 
 class VoiceSpoofDetector:
@@ -43,9 +47,35 @@ class VoiceSpoofDetector:
         use_spectral: bool = True,
         target_samples: int | None = None,
         sample_rate: int = 16000,
+        calibration_path: str | Path | None = None,
     ) -> None:
         self.device = device if torch.cuda.is_available() else "cpu"
         self.sample_rate = sample_rate
+
+        # Calibration lives here and nowhere else. The raw model output is not
+        # a probability - see app/ml/calibration.py - and every consumer
+        # (the /analyze endpoint, the streaming engine, the fusion layer)
+        # reads synthetic_probability. Applying the map at the single point
+        # where the model is called is what keeps them consistent, and stops
+        # a second layer from calibrating an already-calibrated number.
+        self.calibrator = ProbabilityCalibrator()
+        self.calibration_source: str | None = None
+
+        if calibration_path is not None:
+            path = Path(calibration_path)
+            if path.exists():
+                try:
+                    self.calibrator = ProbabilityCalibrator.load(path)
+                    self.calibration_source = str(path)
+                except Exception as exc:
+                    logger.warning("could not read calibration %s: %s", path, exc)
+            else:
+                logger.warning(
+                    "no calibration at %s - scores will be raw model output, "
+                    "which is NOT a probability. Run "
+                    "scripts/calibrate_detector.py.",
+                    path,
+                )
 
         # The encoder was trained on fixed-length windows; feeding it a much
         # shorter clip changes the pooling statistics. Default to the 4 s
@@ -127,6 +157,7 @@ class VoiceSpoofDetector:
                         target_samples=int(
                             config.sample_rate * config.training_window_seconds
                         ),
+                        calibration_path=resolve_path(config.calibration_path),
                     )
         return cls._shared
 
@@ -191,10 +222,19 @@ class VoiceSpoofDetector:
 
         result = self.inference.predict(self._prepare(audio))
 
+        raw = float(result.spoof_probability)
+        calibrated = self.calibrator.calibrate(raw)
+
         return {
-            "synthetic_probability": result.spoof_probability,
-            "bonafide_probability": result.bonafide_probability,
-            "confidence": max(result.spoof_probability, result.bonafide_probability),
+            # The calibrated number is the one that means "chance this is
+            # synthetic". The raw score is kept alongside it because it is
+            # what the checkpoint actually emitted, and a support question
+            # about a decision is unanswerable without it.
+            "synthetic_probability": calibrated,
+            "bonafide_probability": 1.0 - calibrated,
+            "raw_probability": raw,
+            "confidence": max(calibrated, 1.0 - calibrated),
+            "calibrated": not self.calibrator.is_identity,
             "model_status": "neural",
         }
 
@@ -210,6 +250,10 @@ class VoiceSpoofDetector:
             "device": self.device,
             "trained": self.trained,
             "window_seconds": self.target_samples / self.sample_rate,
+            "calibration": {
+                **self.calibrator.to_dict(),
+                "source": self.calibration_source,
+            },
             **self.checkpoint_metadata,
         }
 

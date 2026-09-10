@@ -50,13 +50,36 @@ class DetectorConfig:
 
     smoothing_alpha: float = 0.35
 
-    suspicious_threshold: float = 0.60
-    high_risk_threshold: float = 0.85
+    # -- decision thresholds ----------------------------------------------
+    #
+    # These are DERIVED, not chosen. scripts/calibrate_detector.py fits the
+    # calibration below and reads the operating points off the held-out half
+    # of the ASVspoof 2019 LA evaluation set (35,619 utterances, 13 attack
+    # types the model never trained on). They apply to the CALIBRATED
+    # probability - against the raw model output they mean nothing.
+    #
+    #   p >= 0.137   2.01% false alarm, detects 96.83% of attacks
+    #   p >= 0.500   0.79% false alarm, detects 94.95% of attacks
+    #
+    # The previous values (0.60 / 0.85) were engineering guesses, and worse,
+    # nothing read them: the live risk levels came from RiskThresholds'
+    # own defaults. They are wired through StreamingInferenceEngine now.
+    suspicious_threshold: float = 0.137
+    high_risk_threshold: float = 0.50
+
+    # The point at which a single window is called synthetic. Same basis.
+    decision_threshold: float = 0.50
 
     encoder_name: str = "facebook/wav2vec2-base"
     use_spectral: bool = True
 
     model_path: str = "models/voxshield_antispoof.pt"
+
+    # Committed under results/ rather than models/, which is gitignored - a
+    # calibration that vanishes on clone is worse than none, because the
+    # detector then silently reports raw scores as though they were
+    # probabilities. resolve_path handles the repo-root lookup.
+    calibration_path: str = "results/calibration/antispoof_calibration.json"
 
 
 @dataclass

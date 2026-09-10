@@ -35,32 +35,78 @@ MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 MINIMUM_SECONDS = 1.0
 
 _registry: SpeakerRegistry | None = None
+_calibration_source: str | None = None
+
+
+# Where calibrated thresholds are looked for, in order.
+#
+# models/ is gitignored - deliberately, because that is where the 380 MB
+# checkpoints land. A calibration file living only there disappears on a clean
+# clone, and the registry then silently falls back to uncalibrated placeholders
+# while still answering MATCH / NO_MATCH as though nothing had changed. The
+# committed copy under results/ is the record of record; models/ stays first so
+# a local re-calibration still overrides it without editing code.
+CALIBRATION_CANDIDATES = (
+    "models/speaker_thresholds.json",
+    "results/speaker-calibration/speaker_thresholds_dev.json",
+)
+
+
+def load_speaker_thresholds() -> tuple[SpeakerThresholds, str | None]:
+    """
+    Return the best available thresholds and where they came from.
+
+    Never raises. A malformed or missing file degrades to the uncalibrated
+    placeholders, and every verification response carries ``calibrated`` so a
+    caller can tell which it got.
+    """
+
+    for candidate in CALIBRATION_CANDIDATES:
+        path = resolve_path(candidate)
+        if not path.exists():
+            continue
+
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            modes = data["modes"]
+            thresholds = SpeakerThresholds(**modes["balanced"])
+        except Exception as exc:
+            logger.warning("could not read %s: %s", path, exc)
+            continue
+
+        # A calibration where two modes came out identical is stale rather
+        # than wrong - the registry uses "balanced", which is correct either
+        # way - but an operator picking "low friction" and silently getting
+        # "balanced" deserves to know.
+        if modes.get("low_friction", {}).get("match") == modes["balanced"]["match"]:
+            logger.warning(
+                "%s has low_friction identical to balanced. Regenerate it with "
+                "scripts/calibrate_speaker.py - the mode budgets were fixed "
+                "after this file was written.",
+                path.name,
+            )
+
+        logger.info("loaded speaker thresholds %s from %s", thresholds.version, path)
+        return thresholds, str(path)
+
+    logger.warning(
+        "no speaker calibration found in %s - falling back to UNCALIBRATED "
+        "placeholder thresholds",
+        ", ".join(CALIBRATION_CANDIDATES),
+    )
+    return SpeakerThresholds.balanced(), None
 
 
 def get_registry() -> SpeakerRegistry:
-    """
-    Process-wide registry, loading calibrated thresholds when present.
+    """Process-wide registry, loading calibrated thresholds when present."""
 
-    Falls back to the uncalibrated placeholders rather than refusing to start,
-    but every verification response carries ``calibrated`` so a caller can tell
-    which it got.
-    """
-
-    global _registry
+    global _registry, _calibration_source
 
     if _registry is not None:
         return _registry
 
-    thresholds = SpeakerThresholds.balanced()
-
-    calibration = resolve_path("models/speaker_thresholds.json")
-    if calibration.exists():
-        try:
-            data = json.loads(calibration.read_text(encoding="utf-8"))
-            thresholds = SpeakerThresholds(**data["modes"]["balanced"])
-            logger.info("loaded speaker thresholds %s", thresholds.version)
-        except Exception as exc:
-            logger.warning("could not read %s: %s", calibration, exc)
+    thresholds, source = load_speaker_thresholds()
+    _calibration_source = source
 
     _registry = SpeakerRegistry(
         thresholds=thresholds,
@@ -72,8 +118,9 @@ def get_registry() -> SpeakerRegistry:
 def reset_registry() -> None:
     """Test hook."""
 
-    global _registry
+    global _registry, _calibration_source
     _registry = None
+    _calibration_source = None
 
 
 def decode_upload(data: bytes, filename: str, sample_rate: int = 16000) -> np.ndarray:
@@ -137,11 +184,14 @@ async def enroll_speaker(
     long as it exists.
     """
 
-    identity = identity.strip()
-    if not identity:
-        raise HTTPException(400, "identity must not be empty")
-
     registry = get_registry()
+
+    # Validate before doing any work: embedding five uploads takes seconds,
+    # and rejecting the name afterwards wastes all of it.
+    try:
+        identity = registry.validate_identity(identity)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
     try:
         encoder = SpeakerEncoder.get_shared()
@@ -184,6 +234,11 @@ async def verify_speaker(
     registry = get_registry()
 
     try:
+        identity = registry.validate_identity(identity)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    try:
         encoder = SpeakerEncoder.get_shared()
     except ImportError as exc:
         raise HTTPException(503, str(exc)) from exc
@@ -191,7 +246,7 @@ async def verify_speaker(
     audio = decode_upload(await sample.read(), sample.filename or "sample")
     embedding = encoder.embed(audio)
 
-    return registry.verify(identity.strip(), embedding).to_dict()
+    return registry.verify(identity, embedding).to_dict()
 
 
 @router.get("")
@@ -205,6 +260,7 @@ async def list_speakers() -> dict:
             "no_match": registry.thresholds.no_match,
             "version": registry.thresholds.version,
             "calibrated": registry.thresholds.calibrated,
+            "source": _calibration_source,
         },
         "speakers": [
             {

@@ -21,6 +21,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from starlette.concurrency import run_in_threadpool
 
 from app.api.speakers import decode_upload, get_registry
+from app.audio.speech_check import assess_speech
 from app.ml.config import DetectorConfig
 from app.ml.context import CallContext, ContextAnalyzer
 from app.ml.detector import VoiceSpoofDetector
@@ -63,19 +64,30 @@ async def analyze(
     # -- anti-spoof --------------------------------------------------------
 
     spoof_probability = None
+    spoof_raw = None
     spoof_status = "unavailable"
 
-    try:
-        detector = VoiceSpoofDetector.get_shared(config)
-        spoof = await run_in_threadpool(detector.predict, audio, config.sample_rate)
-        spoof_status = spoof["model_status"]
+    # The detector is a speech model and has never seen silence, hiss or hold
+    # music. Asked about them it answers confidently and wrongly - measured,
+    # four seconds of white noise scores 0.997 synthetic. Check first.
+    presence = assess_speech(audio, config.sample_rate)
 
-        # An untrained detector returns 0.5 as a placeholder. Feeding that into
-        # the fusion would manufacture a 50% risk contribution out of nothing.
-        if spoof_status == "neural":
-            spoof_probability = spoof["synthetic_probability"]
-    except Exception as exc:
-        logger.warning("anti-spoof branch unavailable: %s", exc)
+    if not presence.has_speech:
+        spoof_status = "no_speech"
+    else:
+        try:
+            detector = VoiceSpoofDetector.get_shared(config)
+            spoof = await run_in_threadpool(detector.predict, audio, config.sample_rate)
+            spoof_status = spoof["model_status"]
+
+            # An untrained detector returns 0.5 as a placeholder. Feeding that
+            # into the fusion would manufacture a 50% risk contribution out of
+            # nothing.
+            if spoof_status == "neural":
+                spoof_probability = spoof["synthetic_probability"]
+                spoof_raw = spoof.get("raw_probability")
+        except Exception as exc:
+            logger.warning("anti-spoof branch unavailable: %s", exc)
 
     # -- speaker verification ----------------------------------------------
 
@@ -139,7 +151,14 @@ async def analyze(
     )
 
     notes = []
-    if spoof_probability is None:
+    if spoof_status == "no_speech":
+        notes.append(
+            f"Anti-spoof branch did not contribute: {presence.reason}. The "
+            "detector is a speech model; scoring non-speech would produce a "
+            "confident but meaningless number, so the branch is reported as "
+            "unavailable rather than guessed."
+        )
+    elif spoof_probability is None:
         notes.append(
             f"Anti-spoof branch did not contribute (model status: {spoof_status}). "
             "Train a checkpoint with scripts/train_model.py."
@@ -159,7 +178,9 @@ async def analyze(
         "duration_seconds": round(len(audio) / config.sample_rate, 2),
         "anti_spoof": {
             "synthetic_probability": spoof_probability,
+            "raw_probability": spoof_raw,
             "model_status": spoof_status,
+            "speech_check": presence.to_dict(),
         },
         "speaker": verification,
         "context": assessment.to_dict() if assessment else None,

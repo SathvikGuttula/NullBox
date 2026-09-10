@@ -164,9 +164,17 @@ class TemporalRiskEngine:
 
         reasons: list[str] = []
 
-        if probability >= 0.85:
+        # Graded against the same thresholds that set the level, not against a
+        # second hardcoded pair. Those used to be 0.85 / 0.60 while the level
+        # boundaries were configurable, so a window could be called "strong"
+        # by one rule and LOW by the other. The thresholds are 0-100; the
+        # probability is 0-1.
+        strong = self.thresholds.high / 100.0
+        possible = self.thresholds.suspicious / 100.0
+
+        if probability >= strong:
             reasons.append("Strong synthetic-speech artifacts in this window")
-        elif probability >= 0.60:
+        elif probability >= possible:
             reasons.append("Possible synthetic-speech artifacts in this window")
 
         if self.windows_above_suspicious >= 3:

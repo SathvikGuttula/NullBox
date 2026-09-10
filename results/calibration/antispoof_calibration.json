@@ -1,0 +1,121 @@
+{
+  "scale": 3.7545256329698247,
+  "bias": 9.499883756490517,
+  "temperature": 0.26634523179670005,
+  "fitted": true,
+  "hit_search_bound": false,
+  "metadata": {
+    "source_scores": "scores.csv",
+    "n_total": 71237,
+    "n_fit": 35618,
+    "n_holdout": 35619,
+    "fitted_prior": 0.8967656802740187,
+    "prior": 0.5,
+    "seed": 1234,
+    "held_out": {
+      "ece_before": 0.12631192189561755,
+      "ece_after": 0.014691135509369584,
+      "brier_before": 0.08427678147951118,
+      "brier_after": 0.0244440210641485,
+      "eer": 0.02992784749712231
+    },
+    "operating_points": {
+      "fa_0.05": {
+        "false_alarm_budget": 0.05,
+        "threshold": 0.09397913489790305,
+        "false_alarm_rate": 0.050299075584556825,
+        "miss_rate": 0.026768103691180614,
+        "detection_rate": 0.9732318963088193
+      },
+      "fa_0.02": {
+        "false_alarm_budget": 0.02,
+        "threshold": 0.13697017474693465,
+        "false_alarm_rate": 0.02011963023382273,
+        "miss_rate": 0.0316521085751855,
+        "detection_rate": 0.9683478914248145
+      },
+      "fa_0.01": {
+        "false_alarm_budget": 0.01,
+        "threshold": 0.277473433768926,
+        "false_alarm_rate": 0.010059815116911366,
+        "miss_rate": 0.04157665696127234,
+        "detection_rate": 0.9584233430387277
+      },
+      "fa_0.005": {
+        "false_alarm_budget": 0.005,
+        "threshold": 0.965839765347143,
+        "false_alarm_rate": 0.005165851005981512,
+        "miss_rate": 0.07585861432015278,
+        "detection_rate": 0.9241413856798473
+      },
+      "fa_0.002": {
+        "false_alarm_budget": 0.002,
+        "threshold": 0.9999396117799926,
+        "false_alarm_rate": 0.002175095160413268,
+        "miss_rate": 0.12053473591935131,
+        "detection_rate": 0.8794652640806487
+      }
+    },
+    "at_half": {
+      "threshold": 0.5,
+      "false_alarm_rate": 0.007884719956498096,
+      "miss_rate": 0.050499358191665886,
+      "detection_rate": 0.9495006418083342
+    },
+    "per_attack_miss_at_half": {
+      "A07": {
+        "n": 2457,
+        "miss_rate_at_0.5": 0.005698005698005698
+      },
+      "A08": {
+        "n": 2457,
+        "miss_rate_at_0.5": 0.0
+      },
+      "A09": {
+        "n": 2457,
+        "miss_rate_at_0.5": 0.0
+      },
+      "A10": {
+        "n": 2457,
+        "miss_rate_at_0.5": 0.2201872201872202
+      },
+      "A11": {
+        "n": 2457,
+        "miss_rate_at_0.5": 0.002442002442002442
+      },
+      "A12": {
+        "n": 2457,
+        "miss_rate_at_0.5": 0.0
+      },
+      "A13": {
+        "n": 2457,
+        "miss_rate_at_0.5": 0.0
+      },
+      "A14": {
+        "n": 2457,
+        "miss_rate_at_0.5": 0.002442002442002442
+      },
+      "A15": {
+        "n": 2457,
+        "miss_rate_at_0.5": 0.005291005291005291
+      },
+      "A16": {
+        "n": 2457,
+        "miss_rate_at_0.5": 0.004884004884004884
+      },
+      "A17": {
+        "n": 2457,
+        "miss_rate_at_0.5": 0.13227513227513227
+      },
+      "A18": {
+        "n": 2457,
+        "miss_rate_at_0.5": 0.24216524216524216
+      },
+      "A19": {
+        "n": 2457,
+        "miss_rate_at_0.5": 0.04110704110704111
+      }
+    },
+    "note": "Fitted on half of the ASVspoof 2019 LA evaluation set, reported on the other half. Calibration is monotone so EER is unchanged. Thresholds apply to the CALIBRATED probability, not the raw score."
+  }
+}
