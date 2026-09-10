@@ -1,908 +1,595 @@
 "use client";
 
+/**
+ * The live call: microphone in, fused risk and policy actions out, once a
+ * second.
+ *
+ * Two things this shows that the file-analysis screen cannot. Risk builds over
+ * a call rather than arriving at once - the score is smoothed across windows,
+ * so a single odd window does not fire the whole system. And the identity
+ * estimate improves as speech accumulates, because the tracker keeps a running
+ * centroid rather than averaging per-window similarities.
+ *
+ * The stream sends 16-bit PCM at 16 kHz in 4096-sample chunks, which is 256 ms.
+ * That is exactly what the verification script replays, so a bug reproduced
+ * here reproduces there.
+ */
+
 import { useEffect, useRef, useState } from "react";
 
-import AudioVisualizer from "./AudioVisualizer";
-
-interface LiveCallProps {
-  active: boolean;
-  onToggle: () => void;
-  onRiskUpdate?: (score: number) => void;
-}
-
-interface VoiceFeatures {
-  duration_ms: number;
-  energy: number;
-  spectral_centroid: number;
-  spectral_bandwidth: number;
-  spectral_rolloff: number;
-  spectral_flatness: number;
-  zero_crossing_rate: number;
-  pitch_mean_hz: number;
-  pitch_std_hz: number;
-  voiced_ratio: number;
-  mfcc_mean: number[];
-  mfcc_std: number[];
-}
+import {
+  API_URL,
+  WS_URL,
+  ContextAssessment,
+  FusedRisk,
+  PolicyDecision,
+  Verification,
+  createCall,
+  decisionColour,
+  formatProbability,
+  listSpeakers,
+  prettyDecision,
+  riskColour,
+} from "../lib/api";
+import { microphoneError } from "../lib/recorder";
+import { Badge, Button, COLOURS, LevelMeter, Notice, Panel, Row, TextInput } from "./ui";
 
 interface Analysis {
-  vad: {
-    speech: boolean;
-    confidence: number;
-    rms: number;
-    noise_floor: number;
-  };
-
-  features: VoiceFeatures;
-
+  vad: { speech: boolean; confidence: number; rms: number };
   stream: {
     total_audio_ms: number;
     speech_audio_ms: number;
     speech_ratio: number;
+    chunks: number;
+    speaker_branch: boolean;
+    claimed_identity: string | null;
   };
-
   deepfake?: {
     available: boolean;
+    windows_scored: number;
+    buffered_seconds: number;
     result?: {
+      synthetic_probability: number | null;
       smoothed_probability: number;
       model_status: string;
-    };
+      reasons: string[];
+    } | null;
   };
-
-  speaker?: {
-    identity: string;
-    similarity: number;
-    decision: string;
-    calibrated: boolean;
-    speech_seconds_analysed?: number;
-    reasons: string[];
-  } | null;
-
-  risk?: {
-    risk_score: number;
-    risk_level: string;
-    decision: string;
-    reasons: string[];
-    available_signals: string[];
-    missing_signals: string[];
-    calibrated: boolean;
-  } | null;
+  speaker?: Verification | null;
+  context?: ContextAssessment | null;
+  risk?: FusedRisk | null;
+  policy?: PolicyDecision | null;
 }
 
-interface ServerMessage {
-  type: string;
-  call_id?: string;
-  segment_id?: number;
-  analysis?: Analysis;
-}
+const CONTEXT_PRESETS: Record<string, object> = {
+  none: {},
+  routine: {
+    caller_known: true,
+    trusted_contact: true,
+    device_known: true,
+    beneficiary_known: true,
+    hour_of_day: 14,
+  },
+  suspicious: {
+    caller_known: false,
+    trusted_contact: false,
+    device_known: false,
+    hour_of_day: 23,
+    transaction_amount: 250000,
+    typical_transaction_amount: 2000,
+    beneficiary_known: false,
+    beneficiary_age_days: 0,
+  },
+};
 
-export default function LiveCall({
-  active,
-  onToggle,
-  onRiskUpdate,
-}: LiveCallProps) {
-  const [connected, setConnected] =
-    useState(false);
+export default function LiveCall() {
+  const [active, setActive] = useState(false);
+  const [connected, setConnected] = useState(false);
+  const [analysis, setAnalysis] = useState<Analysis | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [level, setLevel] = useState(0);
 
-  const [analysis, setAnalysis] =
-    useState<Analysis | null>(null);
+  const [identity, setIdentity] = useState("");
+  const [preset, setPreset] = useState("none");
+  const [enrolled, setEnrolled] = useState<string[]>([]);
 
-  const [riskScore, setRiskScore] =
-    useState<number>(0);
-
-  const [riskLevel, setRiskLevel] =
-    useState<string>("LOW");
-
-  const [decision, setDecision] =
-    useState<string>("ALLOW");
-
-  const [reasons, setReasons] =
-    useState<string[]>([]);
-
-  const [
-    speakerSimilarity,
-    setSpeakerSimilarity,
-  ] = useState<number | null>(null);
-
-  const [
-    speakerDecision,
-    setSpeakerDecision,
-  ] = useState<string | null>(null);
-
-  const [deepfakeScore, setDeepfakeScore] =
-    useState<number | null>(null);
-
-  const [modelStatus, setModelStatus] =
-    useState("initializing");
-
-  const [error, setError] =
-    useState<string | null>(null);
-
-  const socketRef =
-    useRef<WebSocket | null>(null);
-
-  const streamRef =
-    useRef<MediaStream | null>(null);
-
-  const processorRef =
-    useRef<ScriptProcessorNode | null>(null);
-
-  const audioContextRef =
-    useRef<AudioContext | null>(null);
-
-  const callIdRef =
-    useRef<string | null>(null);
+  const socketRef = useRef<WebSocket | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const contextRef = useRef<AudioContext | null>(null);
+  const processorRef = useRef<ScriptProcessorNode | null>(null);
 
   useEffect(() => {
-    if (!active) {
-      stopCall();
-      return;
+    listSpeakers()
+      .then((data) => setEnrolled(data.speakers.map((s) => s.identity)))
+      .catch(() => setEnrolled([]));
+  }, []);
+
+  useEffect(() => {
+    return () => stop();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function stop() {
+    processorRef.current?.disconnect();
+    processorRef.current = null;
+
+    contextRef.current?.close().catch(() => {});
+    contextRef.current = null;
+
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
+      socketRef.current.close();
     }
+    socketRef.current = null;
 
-    startCall();
+    setConnected(false);
+    setLevel(0);
+  }
 
-    return () => {
-      stopCall();
-    };
-  }, [active]);
+  async function start() {
+    setError(null);
+    setAnalysis(null);
 
-  async function startCall() {
     try {
-      setError(null);
+      const { call_id } = await createCall();
 
-      const response =
-        await fetch(
-          "http://localhost:8000/api/v1/calls/demo",
-          {
-            method: "POST",
-          }
-        );
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          sampleRate: 16000,
+          echoCancellation: true,
+          noiseSuppression: true,
+          // Off deliberately: automatic gain control flattens the difference
+          // between the loud and quiet parts of speech, and that difference is
+          // exactly what the backend measures to tell speech from steady noise.
+          autoGainControl: false,
+        },
+      });
+      streamRef.current = stream;
 
-      if (!response.ok) {
-        throw new Error(
-          "Unable to create demo call"
-        );
+      const query = new URLSearchParams();
+      if (identity.trim()) query.set("claimed_identity", identity.trim());
+
+      const context = CONTEXT_PRESETS[preset];
+      if (Object.keys(context).length > 0) {
+        query.set("context", JSON.stringify(context));
       }
 
-      const data =
-        await response.json();
-
-      callIdRef.current =
-        data.call_id;
-
-      const stream =
-        await navigator.mediaDevices
-          .getUserMedia({
-            audio: {
-              channelCount: 1,
-              sampleRate: 16000,
-              echoCancellation: true,
-              noiseSuppression: true,
-              autoGainControl: false,
-            },
-          });
-
-      streamRef.current =
-        stream;
-
-      const socket =
-        new WebSocket(
-          `ws://localhost:8000/api/v1/calls/${data.call_id}/stream`
-        );
-
-      socket.binaryType =
-        "arraybuffer";
+      const suffix = query.toString() ? `?${query}` : "";
+      const socket = new WebSocket(
+        `${WS_URL}/api/v1/calls/${call_id}/stream${suffix}`
+      );
+      socket.binaryType = "arraybuffer";
 
       socket.onopen = () => {
         setConnected(true);
-
-        startAudioCapture(
-          stream,
-          socket
-        );
+        capture(stream, socket);
       };
 
-      socket.onmessage =
-        (event) => {
-          try {
-            const message:
-              ServerMessage =
-              JSON.parse(
-                event.data
-              );
-
-            if (
-              message.type ===
-                "voice_analysis" &&
-              message.analysis
-            ) {
-              setAnalysis(
-                message.analysis
-              );
-              const deepfake = message.analysis.deepfake;
-
-              if (
-                deepfake?.available &&
-                deepfake.result
-              ) {
-                setDeepfakeScore(
-                  deepfake.result
-                    .smoothed_probability
-                );
-
-                setModelStatus(
-                  deepfake.result
-                    .model_status
-                );
-              }
-
-              // The fused score, not a placeholder. It only exists once at
-              // least one branch has reported, so leave the previous value
-              // standing rather than flashing 0 between updates.
-              const risk = message.analysis.risk;
-
-              if (risk) {
-                setRiskScore(risk.risk_score);
-                setRiskLevel(risk.risk_level);
-                setDecision(risk.decision);
-                setReasons(risk.reasons ?? []);
-                onRiskUpdate?.(risk.risk_score);
-              }
-
-              const speaker = message.analysis.speaker;
-
-              if (speaker) {
-                setSpeakerSimilarity(
-                  speaker.similarity
-                );
-                setSpeakerDecision(
-                  speaker.decision
-                );
-              }
-            }
-          } catch (err) {
-            console.error(
-              "Invalid server message",
-              err
-            );
+      socket.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          if (message.type === "voice_analysis" && message.analysis) {
+            setAnalysis(message.analysis);
           }
-        };
+        } catch {
+          // A malformed frame should not end the call.
+        }
+      };
 
-      socket.onerror = () => {
+      socket.onerror = () =>
         setError(
-          "WebSocket connection error"
+          `Could not reach the backend at ${API_URL}. Is it running? Check the System tab.`
         );
-      };
 
-      socket.onclose = () => {
+      socket.onclose = (event) => {
         setConnected(false);
+        // 1008 is the policy-violation close the backend uses to reject a bad
+        // context before accepting the socket, with the reason attached.
+        if (event.code === 1008 && event.reason) {
+          setError(event.reason);
+          setActive(false);
+        }
       };
 
-      socketRef.current =
-        socket;
-
-    } catch (err) {
-      console.error(err);
-
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Unable to start call"
-      );
-
-      onToggle();
+      socketRef.current = socket;
+    } catch (exception) {
+      setError(microphoneError(exception));
+      setActive(false);
+      stop();
     }
   }
 
-  function startAudioCapture(
-    stream: MediaStream,
-    socket: WebSocket
-  ) {
-    const audioContext =
-      new AudioContext({
-        sampleRate: 16000,
-      });
+  function capture(stream: MediaStream, socket: WebSocket) {
+    const audio = new AudioContext({ sampleRate: 16000 });
+    contextRef.current = audio;
 
-    audioContextRef.current =
-      audioContext;
+    const source = audio.createMediaStreamSource(stream);
+    const processor = audio.createScriptProcessor(4096, 1, 1);
+    processorRef.current = processor;
 
-    const source =
-      audioContext
-        .createMediaStreamSource(
-          stream
-        );
+    processor.onaudioprocess = (event) => {
+      if (socket.readyState !== WebSocket.OPEN) return;
 
-    const processor =
-      audioContext
-        .createScriptProcessor(
-          4096,
-          1,
-          1
-        );
+      const input = event.inputBuffer.getChannelData(0);
+      const pcm = new Int16Array(input.length);
 
-    processorRef.current =
-      processor;
+      let peak = 0;
+      for (let i = 0; i < input.length; i++) {
+        const sample = Math.max(-1, Math.min(1, input[i]));
+        pcm[i] = sample < 0 ? sample * 32768 : sample * 32767;
+        if (Math.abs(sample) > peak) peak = Math.abs(sample);
+      }
 
-    processor.onaudioprocess =
-      (event) => {
-        if (
-          socket.readyState !==
-          WebSocket.OPEN
-        ) {
-          return;
-        }
+      setLevel(peak);
+      socket.send(pcm.buffer);
+    };
 
-        const input =
-          event.inputBuffer
-            .getChannelData(0);
+    source.connect(processor);
 
-        const pcm =
-          new Int16Array(
-            input.length
-          );
-
-        for (
-          let i = 0;
-          i < input.length;
-          i++
-        ) {
-          const sample =
-            Math.max(
-              -1,
-              Math.min(
-                1,
-                input[i]
-              )
-            );
-
-          pcm[i] =
-            sample < 0
-              ? sample * 32768
-              : sample * 32767;
-        }
-
-        socket.send(
-          pcm.buffer
-        );
-      };
-
-    source.connect(
-      processor
-    );
-
-    processor.connect(
-      audioContext.destination
-    );
+    // Routed through a silent gain node: ScriptProcessorNode only fires while
+    // connected to a destination, and connecting it to the speakers would echo
+    // the microphone back into the room.
+    const silent = audio.createGain();
+    silent.gain.value = 0;
+    processor.connect(silent);
+    silent.connect(audio.destination);
   }
 
-  function stopCall() {
-    processorRef.current
-      ?.disconnect();
-
-    processorRef.current =
-      null;
-
-    audioContextRef.current
-      ?.close()
-      .catch(() => {});
-
-    audioContextRef.current =
-      null;
-
-    streamRef.current
-      ?.getTracks()
-      .forEach(
-        (track) => track.stop()
-      );
-
-    streamRef.current =
-      null;
-
-    if (
-      socketRef.current &&
-      socketRef.current.readyState ===
-        WebSocket.OPEN
-    ) {
-      socketRef.current.close();
+  function toggle() {
+    if (active) {
+      stop();
+      setActive(false);
+    } else {
+      setActive(true);
+      start();
     }
-
-    socketRef.current =
-      null;
-
-    setConnected(false);
-
-    setAnalysis(null);
   }
 
-  const features =
-    analysis?.features;
+  const risk = analysis?.risk;
+  const deepfake = analysis?.deepfake?.result;
 
   return (
-    <div
-      style={{
-        background: "#0d1117",
-        border:
-          "1px solid #1f2937",
-        borderRadius: 16,
-        padding: 24,
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          justifyContent:
-            "space-between",
-          alignItems: "center",
-          marginBottom: 20,
-        }}
-      >
-        <div>
-          <div
-            style={{
-              fontSize: 12,
-              color: "#6b7280",
-              letterSpacing: 1,
-            }}
-          >
-            VOICE STREAM
-          </div>
-
-          <div
-            style={{
-              fontSize: 22,
-              fontWeight: 700,
-              marginTop: 6,
-            }}
-          >
-            {active
-              ? "LIVE ANALYSIS"
-              : "NO ACTIVE CALL"}
-          </div>
-        </div>
-
+    <div style={{ display: "grid", gap: 16 }}>
+      <Panel title="Call setup" subtitle="Both are fixed for the life of the call.">
         <div
           style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            fontSize: 12,
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+            gap: 16,
           }}
         >
-          <span
-            style={{
-              width: 9,
-              height: 9,
-              borderRadius: "50%",
-              background:
-                connected
-                  ? "#22c55e"
-                  : "#374151",
-            }}
-          />
+          <div>
+            <TextInput
+              label="Claimed identity"
+              value={identity}
+              onChange={setIdentity}
+              placeholder="leave empty for anti-spoof only"
+            />
+            {enrolled.length > 0 && (
+              <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+                {enrolled.map((name) => (
+                  <button
+                    key={name}
+                    onClick={() => setIdentity(name)}
+                    disabled={active}
+                    style={{
+                      padding: "5px 11px",
+                      borderRadius: 999,
+                      border: `1px solid ${
+                        identity === name ? COLOURS.accent : COLOURS.border
+                      }`,
+                      background: identity === name ? `${COLOURS.accent}20` : "transparent",
+                      color: identity === name ? COLOURS.accent : COLOURS.dim,
+                      fontSize: 11.5,
+                      cursor: active ? "not-allowed" : "pointer",
+                      fontFamily: "inherit",
+                    }}
+                  >
+                    {name}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
 
-          {connected
-            ? "CONNECTED"
-            : "OFFLINE"}
-        </div>
-      </div>
-
-      <AudioVisualizer
-        level={
-          analysis?.vad.rms ?? 0
-        }
-        active={active}
-      />
-
-      {analysis && (
-        <>
-          <div
-            style={{
-              marginTop: 16,
-              padding: 14,
-              background:
-                "#080b10",
-              borderRadius: 10,
-            }}
-          >
+          <div>
             <div
               style={{
                 fontSize: 11,
-                color: "#6b7280",
                 letterSpacing: 1,
+                color: COLOURS.muted,
+                marginBottom: 6,
+                textTransform: "uppercase",
               }}
             >
-              VOICE ACTIVITY
+              Call context
             </div>
-
-            <div
-              style={{
-                marginTop: 8,
-                fontSize: 18,
-                fontWeight: 700,
-              }}
-            >
-              {analysis.vad.speech
-                ? "SPEECH DETECTED"
-                : "SILENCE"}
-            </div>
-
-            <div
-              style={{
-                color: "#6b7280",
-                fontSize: 12,
-                marginTop: 5,
-              }}
-            >
-              VAD confidence:{" "}
-              {(
-                analysis.vad
-                  .confidence * 100
-              ).toFixed(1)}
-              %
+            <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+              {[
+                ["none", "None"],
+                ["routine", "Routine call"],
+                ["suspicious", "Suspicious call"],
+              ].map(([id, label]) => (
+                <button
+                  key={id}
+                  onClick={() => setPreset(id)}
+                  disabled={active}
+                  style={{
+                    padding: "8px 13px",
+                    borderRadius: 9,
+                    border: `1px solid ${preset === id ? COLOURS.accent : COLOURS.border}`,
+                    background: preset === id ? `${COLOURS.accent}18` : "transparent",
+                    color: preset === id ? COLOURS.accent : COLOURS.dim,
+                    fontSize: 12,
+                    cursor: active ? "not-allowed" : "pointer",
+                    fontFamily: "inherit",
+                    fontWeight: 600,
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
           </div>
+        </div>
+
+        <div style={{ marginTop: 16, display: "flex", gap: 12, alignItems: "center" }}>
+          <Button variant={active ? "danger" : "primary"} onClick={toggle}>
+            {active ? "End call" : "Start live call"}
+          </Button>
+          <span style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12 }}>
+            <span
+              style={{
+                width: 9,
+                height: 9,
+                borderRadius: "50%",
+                background: connected ? COLOURS.good : COLOURS.border,
+              }}
+            />
+            {connected ? "connected" : "offline"}
+          </span>
+        </div>
+
+        {active && (
+          <div style={{ marginTop: 14 }}>
+            <LevelMeter level={level} />
+            <div style={{ fontSize: 11.5, color: COLOURS.muted, marginTop: 7 }}>
+              Keep talking. The first score arrives once three seconds of speech
+              have accumulated, then updates about once a second.
+            </div>
+          </div>
+        )}
+      </Panel>
+
+      {error && <Notice tone="error">{error}</Notice>}
+
+      {analysis && (
+        <>
+          {risk ? (
+            <Panel style={{ borderColor: `${decisionColour(risk.decision)}55` }}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "flex-start",
+                  gap: 16,
+                  flexWrap: "wrap",
+                }}
+              >
+                <div>
+                  <div style={{ fontSize: 11, letterSpacing: 1.2, color: COLOURS.muted }}>
+                    LIVE RISK
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 44,
+                      fontWeight: 800,
+                      lineHeight: 1.1,
+                      marginTop: 4,
+                      color: riskColour(risk.risk_level),
+                    }}
+                  >
+                    {risk.risk_score.toFixed(0)}
+                    <span style={{ fontSize: 16, color: COLOURS.muted }}> / 100</span>
+                  </div>
+                  <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
+                    <Badge colour={riskColour(risk.risk_level)}>{risk.risk_level}</Badge>
+                    <Badge colour={decisionColour(risk.decision)}>
+                      {prettyDecision(risk.decision)}
+                    </Badge>
+                  </div>
+                </div>
+
+                <div style={{ textAlign: "right", fontSize: 12, color: COLOURS.muted }}>
+                  <div>{analysis.deepfake?.windows_scored ?? 0} windows scored</div>
+                  <div style={{ marginTop: 3 }}>
+                    {(analysis.stream.speech_audio_ms / 1000).toFixed(1)}s of speech
+                  </div>
+                </div>
+              </div>
+
+              {risk.reasons.length > 0 && (
+                <ul
+                  style={{
+                    margin: "14px 0 0",
+                    paddingLeft: 18,
+                    fontSize: 12.5,
+                    color: COLOURS.text,
+                    lineHeight: 1.7,
+                  }}
+                >
+                  {risk.reasons.map((reason, index) => (
+                    <li key={index}>{reason}</li>
+                  ))}
+                </ul>
+              )}
+
+              {risk.missing_signals.length > 0 && (
+                <div style={{ marginTop: 12, fontSize: 11.5, color: COLOURS.muted }}>
+                  <strong>Not assessed:</strong>{" "}
+                  {risk.missing_signals.join(", ").replace(/_/g, " ")}
+                </div>
+              )}
+
+              {!risk.calibrated && (
+                <Notice tone="warn">
+                  Fusion weights are uncalibrated placeholders — advisory only.
+                </Notice>
+              )}
+            </Panel>
+          ) : (
+            <Panel title="Live risk">
+              <div style={{ fontSize: 13, color: COLOURS.dim }}>
+                Waiting for enough speech. The detector needs a three-second
+                window before it scores anything.
+              </div>
+            </Panel>
+          )}
 
           <div
             style={{
               display: "grid",
-              gridTemplateColumns:
-                "repeat(2, 1fr)",
-              gap: 10,
-              marginTop: 16,
+              gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+              gap: 16,
             }}
           >
-            <Metric
-              label="PITCH"
-              value={
-                features
-                  ? `${features.pitch_mean_hz.toFixed(1)} Hz`
-                  : "-"
-              }
-            />
+            <Panel title="Anti-spoof">
+              {deepfake && deepfake.model_status === "neural" ? (
+                <>
+                  <Row
+                    label="This window"
+                    value={formatProbability(deepfake.synthetic_probability)}
+                  />
+                  <Row
+                    label="Smoothed"
+                    value={formatProbability(deepfake.smoothed_probability)}
+                    hint="across the call"
+                  />
+                  <Row label="Windows scored" value={analysis.deepfake?.windows_scored ?? 0} />
+                </>
+              ) : deepfake?.model_status === "no_speech" ? (
+                <>
+                  <Badge colour={COLOURS.unknown}>NOT SCORED</Badge>
+                  <div style={{ fontSize: 12.5, color: COLOURS.dim, marginTop: 10 }}>
+                    {deepfake.reasons?.[0] ?? "No speech in this window."}
+                  </div>
+                  <div style={{ fontSize: 11, color: COLOURS.muted, marginTop: 8 }}>
+                    The standing risk is held rather than dragged toward zero —
+                    a pause is not evidence of innocence.
+                  </div>
+                </>
+              ) : (
+                <div style={{ fontSize: 12.5, color: COLOURS.dim }}>
+                  Buffering ({(analysis.deepfake?.buffered_seconds ?? 0).toFixed(1)}s of
+                  3.0s).
+                </div>
+              )}
+            </Panel>
 
-            <Metric
-              label="PITCH VARIATION"
-              value={
-                features
-                  ? `${features.pitch_std_hz.toFixed(1)} Hz`
-                  : "-"
-              }
-            />
+            <Panel title="Identity">
+              {analysis.speaker ? (
+                <>
+                  <Row label="Claimed" value={analysis.speaker.identity} />
+                  <Row label="Similarity" value={analysis.speaker.similarity.toFixed(3)} />
+                  <Row
+                    label="Decision"
+                    value={
+                      <Badge
+                        colour={
+                          analysis.speaker.decision === "MATCH"
+                            ? COLOURS.good
+                            : analysis.speaker.decision === "UNCERTAIN"
+                            ? COLOURS.warn
+                            : COLOURS.bad
+                        }
+                      >
+                        {analysis.speaker.decision}
+                      </Badge>
+                    }
+                  />
+                  {analysis.speaker.speech_seconds_analysed !== undefined && (
+                    <Row
+                      label="Speech analysed"
+                      value={`${analysis.speaker.speech_seconds_analysed.toFixed(1)}s`}
+                      hint="estimate improves"
+                    />
+                  )}
+                </>
+              ) : analysis.stream.speaker_branch ? (
+                <div style={{ fontSize: 12.5, color: COLOURS.dim }}>
+                  Accumulating speech for an identity estimate.
+                </div>
+              ) : (
+                <>
+                  <Badge colour={COLOURS.unknown}>OFF</Badge>
+                  <div style={{ fontSize: 12.5, color: COLOURS.dim, marginTop: 10 }}>
+                    {analysis.stream.claimed_identity
+                      ? `No enrolled profile for '${analysis.stream.claimed_identity}'.`
+                      : "No identity claimed, so this is anti-spoof only."}
+                  </div>
+                </>
+              )}
+            </Panel>
 
-            <Metric
-              label="SPECTRAL CENTROID"
-              value={
-                features
-                  ? `${features.spectral_centroid.toFixed(0)} Hz`
-                  : "-"
-              }
-            />
-
-            <Metric
-              label="SPECTRAL BANDWIDTH"
-              value={
-                features
-                  ? `${features.spectral_bandwidth.toFixed(0)} Hz`
-                  : "-"
-              }
-            />
-
-            <Metric
-              label="SPECTRAL FLATNESS"
-              value={
-                features
-                  ? features
-                      .spectral_flatness
-                      .toFixed(4)
-                  : "-"
-              }
-            />
-
-            <Metric
-              label="VOICED RATIO"
-              value={
-                features
-                  ? `${(
-                      features.voiced_ratio *
-                      100
-                    ).toFixed(1)}%`
-                  : "-"
-              }
-            />
+            <Panel title="Stream">
+              <Row
+                label="Voice activity"
+                value={analysis.vad.speech ? "speech" : "silence"}
+              />
+              <Row
+                label="Speech ratio"
+                value={`${(analysis.stream.speech_ratio * 100).toFixed(0)}%`}
+              />
+              <Row
+                label="Audio received"
+                value={`${(analysis.stream.total_audio_ms / 1000).toFixed(1)}s`}
+              />
+              <Row label="Chunks" value={analysis.stream.chunks} />
+            </Panel>
           </div>
 
-          <div
-            style={{
-              marginTop: 16,
-              padding: 14,
-              background:
-                "#080b10",
-              borderRadius: 10,
-            }}
-          >
-            <div
-              style={{
-                fontSize: 11,
-                color: "#6b7280",
-                letterSpacing: 1,
-              }}
+          {analysis.policy && (
+            <Panel
+              title="Policy"
+              subtitle="What to do about it. No action refuses the customer's transaction."
             >
-              STREAM ANALYTICS
-            </div>
-
-            <div
-              style={{
-                display: "flex",
-                justifyContent:
-                  "space-between",
-                marginTop: 10,
-                fontSize: 13,
-              }}
-            >
-              <span>
-                Speech ratio
-              </span>
-
-              <strong>
-                {(
-                  analysis.stream
-                    .speech_ratio *
-                  100
-                ).toFixed(1)}
-                %
-              </strong>
-            </div>
-          </div>
-
-          {analysis.risk && (
-            <div
-              style={{
-                marginTop: 16,
-                padding: 14,
-                background: "#080b10",
-                borderRadius: 10,
-                border: `1px solid ${
-                  riskLevel === "HIGH"
-                    ? "#7f1d1d"
-                    : riskLevel ===
-                      "SUSPICIOUS"
-                    ? "#78350f"
-                    : "#14532d"
-                }`,
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent:
-                    "space-between",
-                  alignItems:
-                    "baseline",
-                }}
-              >
-                <span
-                  style={{
-                    fontSize: 11,
-                    color: "#6b7280",
-                    letterSpacing: 1,
-                  }}
-                >
-                  VOXSHIELD RISK
-                </span>
-
-                <span
-                  style={{
-                    fontSize: 11,
-                    color:
-                      riskLevel ===
-                      "HIGH"
-                        ? "#fca5a5"
-                        : riskLevel ===
-                          "SUSPICIOUS"
-                        ? "#fcd34d"
-                        : "#86efac",
-                    letterSpacing: 1,
-                  }}
-                >
-                  {riskLevel}
-                </span>
-              </div>
-
-              <div
-                style={{
-                  fontSize: 34,
-                  fontWeight: 700,
-                  marginTop: 6,
-                }}
-              >
-                {riskScore.toFixed(0)}
-                <span
-                  style={{
-                    fontSize: 15,
-                    color: "#6b7280",
-                  }}
-                >
-                  {" "}
-                  / 100
-                </span>
-              </div>
-
-              <div
-                style={{
-                  fontSize: 13,
-                  color: "#9ca3af",
-                  marginTop: 2,
-                }}
-              >
-                {decision.replace(
-                  /_/g,
-                  " "
-                )}
-              </div>
-
-              {speakerSimilarity !==
-                null && (
+              {analysis.policy.actions.map((action) => (
                 <div
+                  key={action.code}
                   style={{
                     display: "flex",
-                    justifyContent:
-                      "space-between",
-                    marginTop: 12,
-                    fontSize: 13,
+                    gap: 12,
+                    alignItems: "flex-start",
+                    padding: "8px 0",
+                    borderBottom: `1px solid ${COLOURS.border}44`,
                   }}
                 >
-                  <span>
-                    Identity match
+                  <span
+                    style={{
+                      color: action.blocking ? COLOURS.warn : COLOURS.muted,
+                      fontWeight: 800,
+                      minWidth: 16,
+                    }}
+                  >
+                    {action.blocking ? "!" : "•"}
                   </span>
-                  <strong>
-                    {speakerSimilarity.toFixed(
-                      2
-                    )}{" "}
-                    <span
-                      style={{
-                        color:
-                          "#6b7280",
-                      }}
-                    >
-                      {speakerDecision}
-                    </span>
-                  </strong>
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 12.5 }}>
+                      {action.code.replace(/_/g, " ")}
+                    </div>
+                    <div style={{ fontSize: 12, color: COLOURS.dim, marginTop: 2 }}>
+                      {action.description}
+                    </div>
+                  </div>
                 </div>
-              )}
-
-              {reasons.length > 0 && (
-                <ul
-                  style={{
-                    margin: "12px 0 0",
-                    paddingLeft: 18,
-                    fontSize: 12,
-                    color: "#d1d5db",
-                    lineHeight: 1.6,
-                  }}
-                >
-                  {reasons.map(
-                    (reason, i) => (
-                      <li key={i}>
-                        {reason}
-                      </li>
-                    )
-                  )}
-                </ul>
-              )}
-
-              {analysis.risk
-                .missing_signals
-                .length > 0 && (
-                <div
-                  style={{
-                    marginTop: 10,
-                    fontSize: 11,
-                    color: "#6b7280",
-                  }}
-                >
-                  Not yet contributing:{" "}
-                  {analysis.risk.missing_signals.join(
-                    ", "
-                  )}
-                </div>
-              )}
-
-              {!analysis.risk
-                .calibrated && (
-                <div
-                  style={{
-                    marginTop: 8,
-                    fontSize: 11,
-                    color: "#fcd34d",
-                  }}
-                >
-                  Fusion weights are
-                  uncalibrated
-                  placeholders.
-                </div>
-              )}
-            </div>
+              ))}
+            </Panel>
           )}
         </>
       )}
-
-      {error && (
-        <div
-          style={{
-            marginTop: 14,
-            padding: 12,
-            borderRadius: 10,
-            background: "#1c1111",
-            color: "#fca5a5",
-            fontSize: 13,
-          }}
-        >
-          {error}
-        </div>
-      )}
-
-      <button
-        onClick={onToggle}
-        style={{
-          width: "100%",
-          padding:
-            "12px 16px",
-          borderRadius: 10,
-          border:
-            "1px solid #374151",
-          background:
-            active
-              ? "#111827"
-              : "#172554",
-          color: "#fff",
-          cursor: "pointer",
-          marginTop: 20,
-        }}
-      >
-        {active
-          ? "End Demo Call"
-          : "Start Voice Analysis"}
-      </button>
-    </div>
-  );
-}
-
-function Metric({
-  label,
-  value,
-}: {
-  label: string;
-  value: string;
-}) {
-  return (
-    <div
-      style={{
-        background:
-          "#080b10",
-        borderRadius: 10,
-        padding: 12,
-      }}
-    >
-      <div
-        style={{
-          color:
-            "#6b7280",
-          fontSize: 10,
-          letterSpacing: 1,
-        }}
-      >
-        {label}
-      </div>
-
-      <div
-        style={{
-          fontSize: 14,
-          fontWeight: 700,
-          marginTop: 5,
-        }}
-      >
-        {value}
-      </div>
     </div>
   );
 }

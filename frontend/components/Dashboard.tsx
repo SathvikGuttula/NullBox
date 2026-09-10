@@ -1,206 +1,143 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
+import { API_URL, getStatus } from "../lib/api";
+import AnalyzeTab from "./AnalyzeTab";
 import LiveCall from "./LiveCall";
-import RiskGauge from "./RiskGauge";
+import SpeakersTab from "./SpeakersTab";
+import StatusTab from "./StatusTab";
+import { Badge, COLOURS, Tabs } from "./ui";
+
+const TABS = [
+  { id: "analyze", label: "Analyse a recording" },
+  { id: "live", label: "Live call" },
+  { id: "speakers", label: "Speakers" },
+  { id: "status", label: "System" },
+];
 
 export default function Dashboard() {
+  const [active, setActive] = useState("analyze");
+  const [online, setOnline] = useState<boolean | null>(null);
+  const [enrolled, setEnrolled] = useState(0);
 
-  const [active, setActive] =
-    useState(false);
+  useEffect(() => {
+    let cancelled = false;
 
-  const [riskScore, setRiskScore] =
-    useState(0);
+    const poll = () =>
+      getStatus()
+        .then((status) => {
+          if (cancelled) return;
+          setOnline(status.ready);
+          setEnrolled(status.speaker.enrolled);
+        })
+        .catch(() => {
+          if (!cancelled) setOnline(false);
+        });
+
+    poll();
+    const timer = setInterval(poll, 15000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [active]);
 
   return (
     <main
       style={{
         minHeight: "100vh",
-        padding: 32,
-        background: "#070a0f",
+        background: COLOURS.background,
+        color: COLOURS.text,
+        padding: "28px clamp(16px, 4vw, 40px) 60px",
+        fontFamily:
+          "system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
       }}
     >
-
       <header
         style={{
           display: "flex",
-          justifyContent:
-            "space-between",
-          alignItems: "center",
-          marginBottom: 32,
+          justifyContent: "space-between",
+          alignItems: "flex-start",
+          gap: 20,
+          marginBottom: 26,
+          flexWrap: "wrap",
         }}
       >
-
         <div>
-
-          <div
-            style={{
-              fontSize: 26,
-              fontWeight: 800,
-              letterSpacing: 1,
-            }}
-          >
+          <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: 1.5 }}>
             VOXSHIELD
           </div>
-
-          <div
-            style={{
-              color: "#6b7280",
-              marginTop: 4,
-            }}
-          >
-            Real-Time Voice Security Platform
+          <div style={{ color: COLOURS.muted, marginTop: 4, fontSize: 13 }}>
+            Voice integrity, speaker identity and call context, fused into one
+            decision
           </div>
-
         </div>
 
-        <div
-          style={{
-            padding:
-              "8px 14px",
-            border:
-              "1px solid #1f2937",
-            borderRadius: 999,
-            fontSize: 12,
-          }}
-        >
-          ● SYSTEM ONLINE
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          {enrolled > 0 && (
+            <Badge colour={COLOURS.muted}>
+              {enrolled} voice{enrolled === 1 ? "" : "s"} enrolled
+            </Badge>
+          )}
+          <Badge
+            colour={
+              online === null ? COLOURS.muted : online ? COLOURS.good : COLOURS.bad
+            }
+          >
+            {online === null
+              ? "CHECKING"
+              : online
+              ? "BACKEND READY"
+              : "BACKEND UNREACHABLE"}
+          </Badge>
         </div>
-
       </header>
 
-      <section
-        style={{
-          display: "grid",
-          gridTemplateColumns:
-            "minmax(280px, 0.8fr) minmax(400px, 1.2fr)",
-          gap: 20,
-        }}
-      >
-
+      {online === false && (
         <div
           style={{
-            background: "#0d1117",
-            border:
-              "1px solid #1f2937",
-            borderRadius: 16,
-            padding: 24,
+            padding: "12px 15px",
+            borderRadius: 10,
+            border: `1px solid ${COLOURS.bad}44`,
+            background: `${COLOURS.bad}12`,
+            color: COLOURS.bad,
+            fontSize: 12.5,
+            marginBottom: 22,
+            lineHeight: 1.6,
           }}
         >
-
-          <div
-            style={{
-              color: "#6b7280",
-              fontSize: 12,
-              letterSpacing: 1,
-              marginBottom: 20,
-            }}
-          >
-            CURRENT VOICE RISK
-          </div>
-
-          <RiskGauge
-            score={riskScore}
-          />
-
-          <div
-            style={{
-              textAlign: "center",
-              marginTop: 20,
-              color: "#6b7280",
-              fontSize: 13,
-            }}
-          >
-            Risk fusion engine
-          </div>
-
+          No backend at <code>{API_URL}</code>. Start it from the repository
+          root with <code>.\start.ps1</code>, or{" "}
+          <code>cd backend &amp;&amp; python -m uvicorn app.main:app --port 8000</code>.
+          The System tab has the details.
         </div>
+      )}
 
-        <LiveCall
-          active={active}
-          onToggle={() =>
-            setActive(!active)
-          }
-          onRiskUpdate={
-            setRiskScore
-          }
-        />
+      <Tabs tabs={TABS} active={active} onChange={setActive} />
 
-      </section>
+      {active === "analyze" && <AnalyzeTab />}
+      {active === "live" && <LiveCall />}
+      {active === "speakers" && <SpeakersTab />}
+      {active === "status" && <StatusTab />}
 
-      <section
+      <footer
         style={{
-          display: "grid",
-          gridTemplateColumns:
-            "repeat(4, 1fr)",
-          gap: 16,
-          marginTop: 20,
+          marginTop: 44,
+          paddingTop: 18,
+          borderTop: `1px solid ${COLOURS.border}`,
+          fontSize: 11.5,
+          color: COLOURS.muted,
+          lineHeight: 1.7,
         }}
       >
-
-        {[
-          [
-            "ACTIVE CALLS",
-            active ? "1" : "0",
-          ],
-          [
-            "AUDIO STREAM",
-            active ? "LIVE" : "OFFLINE",
-          ],
-          [
-            "SPEECH ENGINE",
-            active
-              ? "RUNNING"
-              : "IDLE",
-          ],
-          [
-            "AUDIT EVENTS",
-            "0",
-          ],
-        ].map(
-          ([label, value]) => (
-
-            <div
-              key={label}
-              style={{
-                background:
-                  "#0d1117",
-                border:
-                  "1px solid #1f2937",
-                borderRadius: 14,
-                padding: 20,
-              }}
-            >
-
-              <div
-                style={{
-                  color:
-                    "#6b7280",
-                  fontSize: 11,
-                  letterSpacing: 1,
-                }}
-              >
-                {label}
-              </div>
-
-              <div
-                style={{
-                  fontSize: 22,
-                  fontWeight: 800,
-                  marginTop: 10,
-                }}
-              >
-                {value}
-              </div>
-
-            </div>
-
-          )
-        )}
-
-      </section>
-
+        Anti-spoof: 2.95% EER on 71,237 ASVspoof 2019 LA evaluation utterances
+        across 13 attack types held out of training. At the shipped operating
+        point, 94.95% detection at 0.79% false alarm. Speaker verification:
+        0.373% EER on 67 unseen speakers. Fusion weights and policy bands are
+        uncalibrated placeholders and are labelled as such wherever they appear.
+      </footer>
     </main>
   );
 }
