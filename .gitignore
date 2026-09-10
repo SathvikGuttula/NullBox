@@ -78,3 +78,6 @@ backend/models/
 
 # speaker thresholds live in results/ as the record of record
 models/speaker_thresholds.json
+
+# TypeScript incremental build cache
+*.tsbuildinfo

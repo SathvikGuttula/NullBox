@@ -48,15 +48,16 @@ app = FastAPI(
 )
 
 
+# A browser will not let a page on one origin call this API on another unless
+# the origin is listed here. A deployed frontend therefore needs its own origin
+# added - see DEPLOYMENT.md. The regex exists for hosts whose hostname is not
+# known ahead of time, such as Vercel preview deployments.
 app.add_middleware(
     CORSMiddleware,
-
     allow_origins=settings.cors_origin_list,
-
+    allow_origin_regex=settings.cors_origin_pattern,
     allow_credentials=True,
-
     allow_methods=["*"],
-
     allow_headers=["*"],
 )
 
