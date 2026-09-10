@@ -36,14 +36,16 @@ synthetic-speech forensics
 | Audio preprocessing, VAD, feature extraction | working |
 | Anti-spoof model (wav2vec2 + log-Mel CNN fusion) | **trained — 2.95% EER** on ASVspoof 2019 LA eval |
 | Training + evaluation pipeline (EER / minDCF / DET) | working, [results/](results/) |
-| Temporal risk engine | working, thresholds uncalibrated |
+| Score calibration (Platt, prior-corrected) | **working** — ECE 0.126 -> 0.015 held out |
+| Temporal risk engine | working, thresholds **derived from the DET curve** |
 | Speaker verification (ECAPA-TDNN) | **working — 0.373% EER** on 67 unseen speakers |
 | Risk fusion + policy engine | **working** — explainable 0-100 score, weights uncalibrated |
-| `/speakers/enroll`, `/speakers/verify`, `/analyze` | **working** |
+| Contextual fraud signals | **working**, weights uncalibrated |
+| `/speakers/*`, `/analyze`, `/status`, live websocket | **working** |
+| Dashboard | **working** — analyse, live call, enrolment, system status |
 | Prosody / phase forensics | not started |
-| NLP transcript analysis, context engine, policy engine | not started |
+| NLP transcript analysis | not started |
 | Blockchain audit layer | not started |
-| Dashboard | scaffold only |
 
 **Current result: 2.95 % EER, ROC-AUC 0.986** on 71,237 utterances across 13
 attack types unseen in training — and 3.76 % miss at a 1 % false-alarm budget.
@@ -55,7 +57,50 @@ impersonating someone passes any deepfake detector, and only an identity check
 stops them. `POST /api/v1/analyze` takes audio plus a claimed identity and
 returns a fused risk score with reason codes.
 
-Remaining: prosody, NLP and contextual branches; the live dashboard; and the
+## Run it
+
+```powershell
+.\start.ps1
+```
+
+Checks Python, packages, GPU, checkpoint, calibration and ports before starting
+anything, then opens the backend on `:8000` and the UI on `:3000`. Use
+`.\start.ps1 -Check` to run the checks without starting anything.
+
+Verify the whole system end to end - 59 checks against a running API with real
+audio and the real checkpoint:
+
+```powershell
+cd backend
+..\.venv\Scripts\python.exe scripts\make_test_audio.py   # once
+..\.venv\Scripts\python.exe scriptserify_system.py
+```
+
+**[TESTING.md](TESTING.md)** is the case-by-case guide: every test, what to do,
+and the value the correct answer has.
+
+## On the numbers
+
+The detector's raw output is not a probability. On the evaluation set the
+equal-error point falls at a raw score of 0.044, so judging synthetic-vs-real
+at 0.5 misses 12% of attacks. `scripts/calibrate_detector.py` fits a Platt
+calibration on half the evaluation set and reports on the other half; the
+serving path applies it in exactly one place, and the decision thresholds are
+read off the resulting DET curve rather than chosen.
+
+At the shipped operating point: **94.95% detection at 0.79% false alarm**,
+measured on 35,619 held-out utterances across 13 unseen attack types.
+
+The detector is a *speech* model, so it is not asked about anything else. Four
+seconds of silence scores 0.999 synthetic and white noise 0.997 if you let it;
+`app/audio/speech_check.py` refuses those windows and reports the branch as
+unavailable rather than guessing. A call where nothing could be assessed
+returns `INSUFFICIENT_EVIDENCE`, never `ALLOW`.
+
+Fusion weights, policy bands and context weights remain **uncalibrated
+placeholders** and say so in every response that uses them.
+
+Remaining: prosody and phase forensics, NLP transcript analysis, and the
 blockchain audit layer.
 
 ## Requirements
