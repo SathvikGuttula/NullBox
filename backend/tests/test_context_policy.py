@@ -266,3 +266,89 @@ def test_decision_serialises():
     assert data["actions"]
     assert "requires_human" in data
     assert data["calibrated"] is False
+
+
+# ---------------------------------------------------------------------------
+# untrusted input
+# ---------------------------------------------------------------------------
+
+
+def test_wrong_types_are_refused_at_the_boundary():
+    """
+    A dataclass does not check types, so CallContext(transaction_amount="lots")
+    used to construct happily and then fail four layers away in the policy
+    engine - comparing a string to a float, surfacing as a 500 with an empty
+    body. The place to catch that is where the untrusted JSON arrives.
+    """
+
+    with pytest.raises(ValueError, match="transaction_amount must be int or float"):
+        CallContext.from_dict({"transaction_amount": "lots"})
+
+
+def test_a_boolean_is_not_a_count():
+    """``bool`` is a subclass of ``int``, so an unguarded isinstance check lets
+    ``True`` through as a failed-authentication count of 1."""
+
+    with pytest.raises(ValueError, match="got a boolean"):
+        CallContext.from_dict({"failed_authentication_count": True})
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"hour_of_day": 99},
+        {"hour_of_day": -1},
+        {"transaction_amount": -5},
+        {"beneficiary_age_days": -1},
+        {"failed_authentication_count": -3},
+    ],
+)
+def test_out_of_range_values_are_refused(fields):
+    with pytest.raises(ValueError, match="must be between"):
+        CallContext.from_dict(fields)
+
+
+def test_unknown_fields_are_refused_not_ignored():
+    """
+    Silently dropping an unrecognised key means a caller who sends
+    ``caller_is_known`` gets a 200 and reasonably assumes the signal counted.
+    """
+
+    with pytest.raises(ValueError, match="unknown context fields"):
+        CallContext.from_dict({"caller_is_known": False})
+
+
+def test_a_non_object_is_refused():
+    with pytest.raises(ValueError, match="must be a JSON object"):
+        CallContext.from_dict([1, 2, 3])
+
+
+def test_explicit_nulls_are_treated_as_not_collected():
+    context = CallContext.from_dict({"caller_known": None, "hour_of_day": 14})
+
+    assert context.caller_known is None
+    assert context.hour_of_day == 14
+
+
+def test_a_valid_payload_round_trips():
+    context = CallContext.from_dict(
+        {
+            "caller_known": False,
+            "hour_of_day": 23,
+            "transaction_amount": 250000,
+            "typical_transaction_amount": 2000,
+            "caller_country": "IE",
+        }
+    )
+
+    assessment = ContextAnalyzer().assess(context)
+
+    assert context.transaction_amount == 250000
+    assert assessment.risk > 0.5
+
+
+def test_an_empty_object_is_valid_and_scores_nothing():
+    assessment = ContextAnalyzer().assess(CallContext.from_dict({}))
+
+    assert assessment.risk == 0.0
+    assert assessment.signals_used == []

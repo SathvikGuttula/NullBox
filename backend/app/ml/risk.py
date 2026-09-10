@@ -12,11 +12,16 @@ evidence actually persists.
 
 On the thresholds
 -----------------
-60 and 85 are engineering starting points, not calibrated values. They exist
-so the pipeline runs end to end. Replace them with thresholds derived from a
-validation DET curve - ``app.ml.metrics.threshold_at_false_alarm`` gives you
-the operating point for a chosen false-alarm budget - and record which
-threshold version produced any decision you audit.
+The defaults on ``RiskThresholds`` below (60 / 85) are the last-resort values
+for a caller that supplies none. In the live pipeline they are not used:
+``StreamingInferenceEngine`` passes thresholds built from ``DetectorConfig``,
+which reads them off the held-out half of the ASVspoof 2019 LA evaluation set
+(13.7 for suspicious, 50.0 for high risk, on the calibrated probability scale).
+
+That indirection was previously broken - the config carried the numbers and
+nothing read them, so every live call was graded against 60/85 while the
+config claimed otherwise. Keep them coupled, and record which threshold
+version produced any decision you audit.
 """
 
 from __future__ import annotations
@@ -28,6 +33,11 @@ from dataclasses import dataclass, field
 LOW = "LOW"
 SUSPICIOUS = "SUSPICIOUS"
 HIGH = "HIGH"
+
+# Distinct from LOW. LOW means "we looked and found little"; UNKNOWN means we
+# were unable to look at all - no branch reported. Collapsing the two lets a
+# call with no usable audio read as a call that was checked and cleared.
+UNKNOWN = "UNKNOWN"
 
 
 @dataclass

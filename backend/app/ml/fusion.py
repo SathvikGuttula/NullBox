@@ -34,13 +34,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from app.ml.risk import HIGH, LOW, SUSPICIOUS
+from app.ml.risk import HIGH, LOW, SUSPICIOUS, UNKNOWN
 
 
 ALLOW = "ALLOW"
 WARN = "WARN"
 VERIFY = "SECONDARY_VERIFICATION"
 ESCALATE = "HIGH_RISK_WORKFLOW"
+
+# Not a risk level - the absence of one. Every branch was unavailable, so
+# there is nothing to be confident about in either direction. This used to
+# return ALLOW with a score of 0, which reads as "checked and cleared" and is
+# exactly backwards: four seconds of hold music would clear a call.
+INSUFFICIENT = "INSUFFICIENT_EVIDENCE"
 
 
 @dataclass
@@ -242,9 +248,16 @@ class RiskFusion:
         if weight_total == 0:
             return FusedRisk(
                 risk_score=0.0,
-                risk_level=LOW,
-                decision=ALLOW,
-                contributions=[Contribution("none", 0.0, "No signals available")],
+                risk_level=UNKNOWN,
+                decision=INSUFFICIENT,
+                contributions=[
+                    Contribution(
+                        "none",
+                        0.0,
+                        "No signal could be assessed - this call has NOT been "
+                        "cleared, it has not been checked",
+                    )
+                ],
                 available_signals=[],
                 missing_signals=missing,
                 weights_version=self.weights.version,

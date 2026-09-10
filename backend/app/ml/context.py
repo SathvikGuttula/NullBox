@@ -30,6 +30,13 @@ them on; until then the structure is the contribution, not the numbers.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import ClassVar
+
+
+def _type_name(expected) -> str:
+    if isinstance(expected, tuple):
+        return " or ".join(t.__name__ for t in expected)
+    return expected.__name__
 
 
 @dataclass
@@ -64,6 +71,80 @@ class CallContext:
 
     def known_signals(self) -> int:
         return sum(1 for value in vars(self).values() if value is not None)
+
+    # Field -> (accepted python types, optional inclusive range).
+    #
+    # A dataclass does not check types, so CallContext(transaction_amount="lots")
+    # constructs happily and then fails several layers away - in the policy
+    # engine, comparing a string to a float, as a 500 with no useful message.
+    # The boundary where untrusted JSON arrives is the place to catch that.
+    _FIELD_RULES: ClassVar[dict] = {
+        "caller_known": (bool, None),
+        "trusted_contact": (bool, None),
+        "caller_country": (str, None),
+        "expected_country": (str, None),
+        "device_known": (bool, None),
+        "recent_password_reset": (bool, None),
+        "failed_authentication_count": (int, (0, 10_000)),
+        "hour_of_day": (int, (0, 23)),
+        "outside_business_hours": (bool, None),
+        "transaction_amount": ((int, float), (0, 1e15)),
+        "typical_transaction_amount": ((int, float), (0, 1e15)),
+        "beneficiary_known": (bool, None),
+        "beneficiary_age_days": (int, (0, 100_000)),
+    }
+
+    @classmethod
+    def from_dict(cls, fields: dict) -> "CallContext":
+        """
+        Build from untrusted JSON, or raise ``ValueError`` saying exactly why.
+
+        Unknown keys are rejected rather than ignored: a caller who sends
+        ``{"caller_is_known": false}`` and gets a 200 back would reasonably
+        assume the signal was counted, and it was not.
+        """
+
+        if not isinstance(fields, dict):
+            raise ValueError("context must be a JSON object")
+
+        known = set(cls._FIELD_RULES)
+        unknown = set(fields) - known
+
+        if unknown:
+            raise ValueError(
+                f"unknown context fields: {sorted(unknown)}. "
+                f"Accepted: {sorted(known)}"
+            )
+
+        cleaned: dict = {}
+
+        for name, value in fields.items():
+            if value is None:
+                continue
+
+            expected, bounds = cls._FIELD_RULES[name]
+
+            # bool is a subclass of int in Python, so an unguarded isinstance
+            # check would let True through as failed_authentication_count.
+            if expected is not bool and isinstance(value, bool):
+                raise ValueError(
+                    f"{name} must be {_type_name(expected)}, got a boolean"
+                )
+
+            if not isinstance(value, expected):
+                raise ValueError(
+                    f"{name} must be {_type_name(expected)}, got "
+                    f"{type(value).__name__} ({value!r})"
+                )
+
+            if bounds is not None and not bounds[0] <= value <= bounds[1]:
+                raise ValueError(
+                    f"{name} must be between {bounds[0]} and {bounds[1]}, got {value}"
+                )
+
+            cleaned[name] = value
+
+        return cls(**cleaned)
 
 
 @dataclass

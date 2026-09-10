@@ -30,9 +30,11 @@ import numpy as np
 from app.audio.features import AcousticFeatureExtractor
 from app.audio.vad import VoiceActivityDetector
 from app.ml.config import DetectorConfig
+from app.ml.context import CallContext, ContextAnalyzer
 from app.ml.detector import VoiceSpoofDetector
 from app.ml.fusion import RiskFusion
 from app.ml.inference import StreamingInferenceEngine
+from app.ml.policy import PolicyEngine
 from app.ml.speaker import LiveSpeakerTracker, SpeakerEncoder
 
 logger = logging.getLogger("voxshield.pipeline")
@@ -58,10 +60,21 @@ class AudioFeaturePipeline:
         config: DetectorConfig | None = None,
         claimed_identity: str | None = None,
         heavy_feature_interval: int = 3,
+        call_context: CallContext | None = None,
     ) -> None:
         self.config = config or DetectorConfig()
         self.sample_rate = sample_rate
         self.claimed_identity = (claimed_identity or "").strip() or None
+
+        # Context is fixed for the life of the call and cheap to score, so it
+        # is assessed once here rather than on every chunk. Without it the
+        # live path could only ever see two of the three branches, which is
+        # what made a genuine-human impersonator invisible to it.
+        self.call_context = call_context
+        self.context = (
+            ContextAnalyzer().assess(call_context) if call_context is not None else None
+        )
+        self.policy_engine = PolicyEngine()
 
         self.vad = VoiceActivityDetector(sample_rate=sample_rate)
         self.extractor = AcousticFeatureExtractor(sample_rate=sample_rate)
@@ -75,6 +88,7 @@ class AudioFeaturePipeline:
         )
 
         self.fusion = RiskFusion()
+        self.policy: dict | None = None
         self.speaker = self._build_speaker_tracker()
 
         self.heavy_feature_interval = max(int(heavy_feature_interval), 1)
@@ -139,7 +153,8 @@ class AudioFeaturePipeline:
 
     def _empty_result(self) -> dict:
         return {"vad": {}, "features": {}, "deepfake": {}, "speaker": None,
-                "risk": None, "stream": {}}
+                "context": self.context.to_dict() if self.context else None,
+                "risk": None, "policy": None, "stream": {}}
 
     # -- main entry point --------------------------------------------------
 
@@ -184,7 +199,7 @@ class AudioFeaturePipeline:
 
         # Re-fuse whenever either branch produced something new.
         if latest is not None or speaker_updated:
-            self.latest_risk = self.fusion.fuse(
+            fused = self.fusion.fuse(
                 spoof_probability=(
                     latest["smoothed_probability"]
                     if latest and latest["model_status"] == "neural"
@@ -196,6 +211,24 @@ class AudioFeaturePipeline:
                 speaker_decision=(
                     speaker_state["decision"] if speaker_state else None
                 ),
+                context_score=self.context.risk if self.context else None,
+            )
+
+            self.latest_risk = fused.to_dict()
+
+            # A score with no action attached moves the decision onto whoever
+            # is reading it, under time pressure, while someone talks at them
+            # urgently - which is the condition social engineering exploits.
+            self.policy = self.policy_engine.decide(
+                risk_decision=fused.decision,
+                risk_score=fused.risk_score,
+                transaction_amount=(
+                    self.call_context.transaction_amount if self.call_context else None
+                ),
+                identity_decision=(
+                    speaker_state["decision"] if speaker_state else None
+                ),
+                calibrated_inputs=self.latest_risk["calibrated"],
             ).to_dict()
 
         speech_ratio = self.speech_audio_ms / max(self.total_audio_ms, 1e-8)
@@ -210,7 +243,9 @@ class AudioFeaturePipeline:
                 "buffered_seconds": round(self.inference.buffered_seconds, 2),
             },
             "speaker": speaker_state,
+            "context": self.context.to_dict() if self.context else None,
             "risk": self.latest_risk,
+            "policy": self.policy,
             "stream": {
                 "total_audio_ms": round(self.total_audio_ms, 2),
                 "speech_audio_ms": round(self.speech_audio_ms, 2),
@@ -229,3 +264,4 @@ class AudioFeaturePipeline:
         self.total_audio_ms = 0.0
         self.speech_audio_ms = 0.0
         self.latest_risk = None
+        self.policy = None

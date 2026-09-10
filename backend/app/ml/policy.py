@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from app.ml.fusion import ALLOW, ESCALATE, VERIFY, WARN
+from app.ml.fusion import ALLOW, ESCALATE, INSUFFICIENT, VERIFY, WARN
 
 
 @dataclass
@@ -71,6 +71,11 @@ MANAGER_APPROVAL = Action(
 )
 ESCALATE_SECURITY = Action(
     "ESCALATE_SECURITY", "Raise an incident with the security team"
+)
+COLLECT_MORE_AUDIO = Action(
+    "COLLECT_MORE_AUDIO",
+    "No signal could be assessed - keep the caller talking and re-check "
+    "before treating this call as verified",
 )
 
 
@@ -121,7 +126,17 @@ class PolicyEngine:
         actions: list[Action] = []
         rationale: list[str] = []
 
-        if risk_decision == ALLOW:
+        if risk_decision == INSUFFICIENT:
+            # Deliberately not MONITOR alone. "Monitor" reads as a call that
+            # was assessed and found unremarkable; this one was not assessed.
+            actions.extend([COLLECT_MORE_AUDIO, NOTIFY_AGENT])
+            rationale.append(
+                "No branch could be assessed - there was no usable speech, or "
+                "no identity was claimed and the detector was unavailable. "
+                "This is not a low-risk result; it is the absence of one."
+            )
+
+        elif risk_decision == ALLOW:
             actions.append(MONITOR)
             rationale.append(f"Risk {risk_score:.0f}/100 is within normal range")
 

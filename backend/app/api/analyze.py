@@ -113,23 +113,8 @@ async def analyze(
         import json
 
         try:
-            fields = json.loads(context)
-            if not isinstance(fields, dict):
-                raise ValueError("context must be a JSON object")
-
-            known = set(vars(CallContext()))
-            unknown = set(fields) - known
-            if unknown:
-                raise HTTPException(
-                    400,
-                    f"unknown context fields: {sorted(unknown)}. "
-                    f"Accepted: {sorted(known)}",
-                )
-
-            call_context = CallContext(**fields)
+            call_context = CallContext.from_dict(json.loads(context))
             assessment = _context.assess(call_context)
-        except HTTPException:
-            raise
         except (ValueError, TypeError) as exc:
             raise HTTPException(400, f"could not parse context: {exc}") from exc
 

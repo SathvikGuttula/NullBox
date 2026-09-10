@@ -11,6 +11,7 @@ import pytest
 
 from app.ml.fusion import (
     ALLOW,
+    INSUFFICIENT,
     ESCALATE,
     VERIFY,
     WARN,
@@ -121,12 +122,22 @@ def test_missing_signals_are_reported():
     assert "nlp" in result.missing_signals
 
 
-def test_no_signals_at_all_is_zero_not_a_crash():
+def test_no_signals_at_all_is_not_an_all_clear():
+    """
+    Zero assessable branches is the absence of a verdict, not a good one.
+    Returning ALLOW here meant four seconds of hold music cleared a call, and
+    it contradicts the rule the rest of this system follows: unknown is not
+    innocent.
+    """
+
     result = RiskFusion().fuse()
 
     assert result.risk_score == 0.0
-    assert result.decision == ALLOW
+    assert result.decision == INSUFFICIENT
+    assert result.decision != ALLOW
+    assert result.risk_level == "UNKNOWN"
     assert result.available_signals == []
+    assert "NOT been cleared" in result.contributions[0].detail
 
 
 def test_contributions_sum_to_the_reported_score():
