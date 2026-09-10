@@ -247,21 +247,13 @@ export async function createCall(): Promise<{ call_id: string }> {
 }
 
 // -- presentation helpers --------------------------------------------------
+//
+// Colour no longer lives here. It is decided by `signalForLevel` and friends in
+// components/ui.tsx, which map a backend state to one of the five design-system
+// signals rather than to a literal — so a palette change happens in the
+// stylesheet and nowhere else. The hex tables that used to sit here were the
+// last place in the app that hardcoded a colour.
 
-export function riskColour(level: string): string {
-  if (level === "HIGH") return "#f87171";
-  if (level === "SUSPICIOUS") return "#fbbf24";
-  if (level === "UNKNOWN") return "#a78bfa";
-  return "#4ade80";
-}
-
-export function decisionColour(decision: string): string {
-  if (decision === "HIGH_RISK_WORKFLOW") return "#f87171";
-  if (decision === "SECONDARY_VERIFICATION") return "#fbbf24";
-  if (decision === "WARN") return "#fbbf24";
-  if (decision === "INSUFFICIENT_EVIDENCE") return "#a78bfa";
-  return "#4ade80";
-}
 
 /**
  * A calibrated probability saturates: a confident spoof comes back as

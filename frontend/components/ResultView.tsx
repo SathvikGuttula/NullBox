@@ -1,15 +1,14 @@
 "use client";
 
 /**
- * One analysis result, rendered so that every number says what it means.
+ * One analysis result.
  *
- * Three rules this follows, all of them things the backend is careful about
- * and which a UI can quietly undo:
+ * The layout follows what an analyst reads in order: the verdict and what it
+ * means, then why, then what to do, then the branch detail if they want it.
+ * Three rules the backend is careful about, which a UI can quietly undo:
  *
- *   - A branch that did not run is shown as "not assessed", never as zero
- *     risk. The backend puts those in `missing_signals` precisely so this can
- *     be displayed rather than hidden.
- *   - A decision is never shown without its actions. A bare "87" moves the
+ *   - A branch that did not run reads as "not assessed", never as zero risk.
+ *   - A decision is never shown without its actions. A bare number moves the
  *     decision onto whoever is reading it, under time pressure, which is the
  *     condition social engineering exploits.
  *   - Uncalibrated inputs are labelled on the same screen as the score they
@@ -17,398 +16,520 @@
  */
 
 import {
+  CircleAlert,
+  Fingerprint,
+  Gauge,
+  Hand,
+  ListChecks,
+  ScanLine,
+  Waves,
+} from "lucide-react";
+
+import {
   AnalysisResult,
-  decisionColour,
   formatProbability,
   prettyDecision,
-  riskColour,
 } from "../lib/api";
-import { Badge, COLOURS, Notice, Panel, Row } from "./ui";
+import {
+  AnimatedNumber,
+  DataList,
+  DataRow,
+  Notice,
+  Panel,
+  Pill,
+  Signal,
+  signalForDecision,
+  signalForLevel,
+  signalForVerification,
+  signalVar,
+} from "./ui";
+import { RiskScale, SimilarityScale, ThresholdRuler } from "./viz";
 
-export default function ResultView({ result }: { result: AnalysisResult }) {
+export default function ResultView({
+  result,
+  thresholds,
+}: {
+  result: AnalysisResult;
+  thresholds?: { match: number; no_match: number };
+}) {
   const { anti_spoof, speaker, context, risk, policy, notes } = result;
 
+  const insufficient = risk.decision === "INSUFFICIENT_EVIDENCE";
+  const signal: Signal = insufficient ? "unknown" : signalForLevel(risk.risk_level);
+  const decisionSignal = signalForDecision(risk.decision);
+  const colour = signalVar(insufficient ? "unknown" : decisionSignal);
+
+  const reported = risk.available_signals.length;
+  const total = reported + risk.missing_signals.length;
+  const maxPoints = Math.max(...risk.contributions.map((c) => c.points), 1);
+
   return (
-    <div style={{ display: "grid", gap: 16 }}>
-      <Panel style={{ borderColor: `${decisionColour(risk.decision)}55` }}>
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "flex-start",
-            gap: 16,
-            flexWrap: "wrap",
-          }}
-        >
-          <div>
-            <div
-              style={{ fontSize: 11, letterSpacing: 1.2, color: COLOURS.muted }}
-            >
-              FUSED RISK
+    <div className="stack stack-4">
+      {/* ---------------------------------------------------------- verdict */}
+      <section
+        className="verdict rise"
+        style={{ ["--verdict-colour" as string]: colour }}
+      >
+        <div className="verdict-body">
+          <div className="stack stack-4" style={{ minWidth: 0 }}>
+            <div>
+              <div className="label" style={{ marginBottom: 6 }}>
+                Fused risk
+              </div>
+              <div className="verdict-score">
+                {insufficient ? (
+                  <span style={{ fontSize: "var(--t-3xl)", letterSpacing: "-.02em" }}>
+                    Not assessed
+                  </span>
+                ) : (
+                  <>
+                    <AnimatedNumber value={risk.risk_score} />
+                    <span className="of"> / 100</span>
+                  </>
+                )}
+              </div>
             </div>
-            <div
-              style={{
-                fontSize: 46,
-                fontWeight: 800,
-                lineHeight: 1.1,
-                marginTop: 4,
-                color: riskColour(risk.risk_level),
-              }}
-            >
-              {risk.risk_score.toFixed(0)}
-              <span style={{ fontSize: 17, color: COLOURS.muted }}> / 100</span>
+
+            <div className="row row-wrap" style={{ gap: "var(--s2)" }}>
+              <Pill signal={signal}>{insufficient ? "Unknown" : risk.risk_level}</Pill>
+              <Pill signal={decisionSignal}>{prettyDecision(risk.decision)}</Pill>
+              {policy.requires_human && <Pill signal="verify">Needs a human</Pill>}
             </div>
-            <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
-              <Badge colour={riskColour(risk.risk_level)}>
-                {risk.risk_level}
-              </Badge>
-              <Badge colour={decisionColour(risk.decision)}>
-                {prettyDecision(risk.decision)}
-              </Badge>
-            </div>
+
+            <RiskScale score={risk.risk_score} signal={signal} unknown={insufficient} />
           </div>
 
-          <div style={{ textAlign: "right", fontSize: 12, color: COLOURS.muted }}>
-            <div>{result.duration_seconds}s of audio</div>
-            <div style={{ marginTop: 3 }}>
-              {risk.available_signals.length} of{" "}
-              {risk.available_signals.length + risk.missing_signals.length}{" "}
-              branches reported
+          <div className="verdict-meta">
+            <div className="label">Branches</div>
+            <div
+              className="mono"
+              style={{ fontSize: "var(--t-xl)", fontWeight: 600, letterSpacing: "-.02em" }}
+            >
+              {reported}
+              <span style={{ color: "var(--text-4)" }}>/{total}</span>
+            </div>
+            <div style={{ fontSize: "var(--t-xs)", color: "var(--text-3)" }}>
+              {result.duration_seconds}s of audio
             </div>
           </div>
         </div>
 
-        {risk.decision === "INSUFFICIENT_EVIDENCE" && (
-          <Notice tone="warn">
-            <strong>Not a clean result — an absent one.</strong> No branch could
-            be assessed, so this call has not been cleared; it has not been
-            checked. A score of 0 here means &quot;nothing to score&quot;, not
-            &quot;nothing wrong&quot;.
-          </Notice>
+        {insufficient && (
+          <div style={{ padding: "0 var(--s6) var(--s5)" }}>
+            <Notice tone="unknown">
+              <strong>Not a clean result — an absent one.</strong> No branch could be
+              assessed, so this call has not been cleared; it has not been checked. A
+              score of zero here means &ldquo;nothing to score&rdquo;, not
+              &ldquo;nothing wrong&rdquo;.
+            </Notice>
+          </div>
         )}
+      </section>
 
-        {risk.contributions.length > 0 && risk.decision !== "INSUFFICIENT_EVIDENCE" && (
-          <div style={{ marginTop: 18 }}>
-            <div
-              style={{
-                fontSize: 11,
-                letterSpacing: 1.2,
-                color: COLOURS.muted,
-                marginBottom: 8,
-              }}
-            >
-              WHY
-            </div>
+      {/* ------------------------------------------------------------- why */}
+      {!insufficient && risk.contributions.length > 0 && (
+        <Panel
+          title="Why"
+          aside={<span className="label">Points, out of 100</span>}
+          className="rise rise-1"
+        >
+          <div className="contrib">
             {risk.contributions.map((contribution, index) => (
-              <div
-                key={index}
-                style={{
-                  display: "flex",
-                  gap: 12,
-                  alignItems: "baseline",
-                  padding: "6px 0",
-                  borderBottom: `1px solid ${COLOURS.border}44`,
-                }}
-              >
-                <span
-                  style={{
-                    minWidth: 52,
-                    fontWeight: 700,
-                    fontVariantNumeric: "tabular-nums",
-                    color: contribution.points > 0 ? COLOURS.warn : COLOURS.muted,
-                  }}
-                >
-                  {contribution.points > 0
-                    ? `+${contribution.points.toFixed(0)}`
-                    : "—"}
-                </span>
-                <span style={{ fontSize: 13, color: COLOURS.text }}>
-                  {contribution.detail}
-                </span>
+              <div className="contrib-row" key={`${contribution.source}-${index}`}>
+                <div className={`contrib-pts${contribution.points <= 0 ? " zero" : ""}`}>
+                  {contribution.points > 0 ? `+${contribution.points.toFixed(0)}` : "—"}
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <div className="contrib-text">{contribution.detail}</div>
+                  {contribution.points > 0 && (
+                    <div className="contrib-bar">
+                      <div
+                        className="contrib-fill"
+                        style={{
+                          width: `${(contribution.points / maxPoints) * 100}%`,
+                          background: colour,
+                          animation: "growX var(--dur-4) var(--ease-out) both",
+                          animationDelay: `${140 + index * 60}ms`,
+                        }}
+                      />
+                    </div>
+                  )}
+                </div>
               </div>
             ))}
           </div>
-        )}
 
-        {risk.missing_signals.length > 0 && (
-          <div style={{ marginTop: 12, fontSize: 11.5, color: COLOURS.muted }}>
-            <strong>Not assessed:</strong>{" "}
-            {risk.missing_signals.join(", ").replace(/_/g, " ")}. These
-            contributed nothing in either direction — they are not evidence of
-            safety.
-          </div>
-        )}
-
-        {!risk.calibrated && (
-          <Notice tone="warn">
-            The fusion weights are uncalibrated placeholders. This score is
-            advisory — do not automate an irreversible action on it.
-          </Notice>
-        )}
-      </Panel>
-
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
-          gap: 16,
-        }}
-      >
-        <Panel title="Anti-spoof">
-          {anti_spoof.model_status === "neural" ? (
-            <>
-              <Row
-                label="Synthetic probability"
-                value={
-                  <span
-                    style={{
-                      color:
-                        (anti_spoof.synthetic_probability ?? 0) >= 0.5
-                          ? COLOURS.bad
-                          : COLOURS.good,
-                    }}
-                  >
-                    {formatProbability(anti_spoof.synthetic_probability)}
-                  </span>
-                }
-                hint="calibrated"
-              />
-              <Row
-                label="Raw model score"
-                value={anti_spoof.raw_probability?.toFixed(4) ?? "n/a"}
-                hint="uncalibrated"
-              />
-              <Row
-                label="Verdict"
-                value={
-                  (anti_spoof.synthetic_probability ?? 0) >= 0.5
-                    ? "SYNTHETIC"
-                    : "genuine speech"
-                }
-              />
-              <div style={{ fontSize: 11, color: COLOURS.muted, marginTop: 10 }}>
-                At this operating point the detector catches 94.95% of attacks
-                with a 0.79% false-alarm rate, measured on 35,619 held-out
-                utterances across 13 attack types it never trained on.
-              </div>
-            </>
-          ) : anti_spoof.model_status === "no_speech" ? (
-            <>
-              <Badge colour={COLOURS.unknown}>NOT ASSESSED</Badge>
-              <div
-                style={{ fontSize: 12.5, color: COLOURS.dim, marginTop: 10, lineHeight: 1.6 }}
-              >
-                {anti_spoof.speech_check?.reason}
-              </div>
-              {anti_spoof.speech_check && (
-                <div style={{ marginTop: 12 }}>
-                  <Row
-                    label="Level (RMS)"
-                    value={anti_spoof.speech_check.rms.toFixed(5)}
-                  />
-                  <Row
-                    label="Dynamic range"
-                    value={anti_spoof.speech_check.dynamic_range.toFixed(1)}
-                    hint="speech is >10"
-                  />
-                </div>
-              )}
-              <div style={{ fontSize: 11, color: COLOURS.muted, marginTop: 10 }}>
-                The detector is a speech model. Asked about silence or noise it
-                answers confidently and wrongly — 0.999 and 0.997 synthetic
-                respectively, measured — so the branch is withheld instead.
-              </div>
-            </>
-          ) : (
-            <>
-              <Badge colour={COLOURS.muted}>{anti_spoof.model_status}</Badge>
-              <div style={{ fontSize: 12.5, color: COLOURS.dim, marginTop: 10 }}>
-                The anti-spoof branch did not contribute.
-              </div>
-            </>
+          {risk.missing_signals.length > 0 && (
+            <div style={{ marginTop: "var(--s4)" }}>
+              <Notice tone="unknown">
+                <strong>Not assessed:</strong>{" "}
+                {risk.missing_signals.join(", ").replace(/_/g, " ")}. These contributed
+                nothing in either direction — they are not evidence of safety.
+              </Notice>
+            </div>
           )}
         </Panel>
+      )}
 
-        <Panel title="Speaker identity">
-          {speaker ? (
-            <>
-              <Row
-                label="Claimed identity"
-                value={<code style={{ fontSize: 12 }}>{speaker.identity}</code>}
-              />
-              <Row
-                label="Similarity"
-                value={speaker.similarity.toFixed(3)}
-                hint="cosine"
-              />
-              <Row
-                label="Decision"
-                value={
-                  <Badge
-                    colour={
-                      speaker.decision === "MATCH"
-                        ? COLOURS.good
-                        : speaker.decision === "UNCERTAIN"
-                        ? COLOURS.warn
-                        : COLOURS.bad
-                    }
-                  >
-                    {speaker.decision}
-                  </Badge>
-                }
-              />
-              {speaker.reasons?.length > 0 && (
-                <ul
-                  style={{
-                    margin: "12px 0 0",
-                    paddingLeft: 18,
-                    fontSize: 12,
-                    color: COLOURS.dim,
-                    lineHeight: 1.65,
-                  }}
-                >
-                  {speaker.reasons.map((reason, index) => (
-                    <li key={index}>{reason}</li>
-                  ))}
-                </ul>
-              )}
-            </>
-          ) : (
-            <>
-              <Badge colour={COLOURS.unknown}>NOT ASSESSED</Badge>
-              <div
-                style={{ fontSize: 12.5, color: COLOURS.dim, marginTop: 10, lineHeight: 1.6 }}
-              >
-                No identity was claimed, so nothing here says whether the
-                speaker is who they claim to be. A low risk score above is an
-                anti-spoof result only.
-              </div>
-            </>
-          )}
-        </Panel>
-
-        <Panel title="Call context">
-          {context ? (
-            <>
-              <Row
-                label="Context risk"
-                value={`${(context.risk * 100).toFixed(0)}%`}
-                hint={`${context.points.toFixed(0)} of ${context.possible.toFixed(0)} pts`}
-              />
-              <Row label="Signals used" value={context.signals_used.length} />
-              <Row label="Not collected" value={context.missing.length} />
-              {context.reasons.length > 0 && (
-                <ul
-                  style={{
-                    margin: "12px 0 0",
-                    paddingLeft: 18,
-                    fontSize: 12,
-                    color: COLOURS.dim,
-                    lineHeight: 1.65,
-                  }}
-                >
-                  {context.reasons.map((reason, index) => (
-                    <li key={index}>{reason}</li>
-                  ))}
-                </ul>
-              )}
-              <div style={{ fontSize: 11, color: COLOURS.muted, marginTop: 10 }}>
-                Scored as a fraction of the risk that could be assessed, not of
-                all conceivable risk — otherwise two bad signals out of two look
-                harmless.
-              </div>
-            </>
-          ) : (
-            <>
-              <Badge colour={COLOURS.unknown}>NOT COLLECTED</Badge>
-              <div
-                style={{ fontSize: 12.5, color: COLOURS.dim, marginTop: 10, lineHeight: 1.6 }}
-              >
-                No call metadata was supplied. This is the branch that catches a
-                genuine human impersonator — real voice, wrong person, urgent
-                unusual request — which neither of the other two can.
-              </div>
-            </>
-          )}
-        </Panel>
-      </div>
-
+      {/* ----------------------------------------------------------- policy */}
       <Panel
-        title="Policy — what to do about it"
-        subtitle="Every action is a verification step, a reversible hold, or a human escalation. None of them refuses the customer's transaction."
+        title="What to do about it"
+        aside={
+          policy.requires_human ? (
+            <Pill signal="verify">Human required</Pill>
+          ) : (
+            <Pill signal="neutral">Automatic</Pill>
+          )
+        }
+        className="rise rise-2"
+        note={
+          <>
+            Every action is a verification step, a reversible hold, or a human
+            escalation. None of them refuses the customer&rsquo;s transaction — a false
+            positive should cost someone thirty seconds, not their payment.
+          </>
+        }
       >
-        {policy.actions.map((action) => (
-          <div
-            key={action.code}
-            style={{
-              display: "flex",
-              gap: 12,
-              alignItems: "flex-start",
-              padding: "9px 0",
-              borderBottom: `1px solid ${COLOURS.border}44`,
-            }}
-          >
-            <span
-              style={{
-                color: action.blocking ? COLOURS.warn : COLOURS.muted,
-                fontWeight: 800,
-                minWidth: 18,
-              }}
-            >
-              {action.blocking ? "!" : "•"}
-            </span>
-            <div>
-              <div style={{ fontWeight: 700, fontSize: 12.5 }}>
-                {action.code.replace(/_/g, " ")}
-              </div>
-              <div style={{ fontSize: 12, color: COLOURS.dim, marginTop: 2 }}>
-                {action.description}
+        <div>
+          {policy.actions.map((action) => (
+            <div className="action" key={action.code}>
+              <span className={`action-icon ${action.blocking ? "blocking" : "passive"}`}>
+                {action.blocking ? <Hand size={12} /> : <ListChecks size={12} />}
+              </span>
+              <div>
+                <div className="action-code">{action.code.replace(/_/g, " ")}</div>
+                <div className="action-desc">{action.description}</div>
               </div>
             </div>
-          </div>
-        ))}
-
-        {policy.requires_human && (
-          <Notice tone="warn">
-            This decision requires a human. Actions marked
-            &nbsp;<strong>!</strong>&nbsp; cannot be completed automatically.
-          </Notice>
-        )}
+          ))}
+        </div>
 
         {policy.rationale.length > 0 && (
           <ul
             style={{
-              margin: "14px 0 0",
-              paddingLeft: 18,
-              fontSize: 12,
-              color: COLOURS.muted,
-              lineHeight: 1.65,
+              margin: "var(--s4) 0 0",
+              paddingLeft: 16,
+              fontSize: "var(--t-sm)",
+              color: "var(--text-3)",
+              lineHeight: 1.6,
             }}
           >
             {policy.rationale.map((line, index) => (
-              <li key={index}>{line}</li>
+              <li key={index} style={{ marginBottom: 4 }}>
+                {line}
+              </li>
             ))}
           </ul>
         )}
       </Panel>
 
-      {notes.length > 0 && (
-        <Panel title="Notes from the analyser">
-          <ul
-            style={{
-              margin: 0,
-              paddingLeft: 18,
-              fontSize: 12.5,
-              color: COLOURS.dim,
-              lineHeight: 1.7,
-            }}
-          >
-            {notes.map((note, index) => (
-              <li key={index}>{note}</li>
-            ))}
-          </ul>
-        </Panel>
+      {/* ---------------------------------------------------------- branches */}
+      <div className="grid grid-2 rise rise-3">
+        <AntiSpoofPanel result={result} />
+        <SpeakerPanel result={result} thresholds={thresholds} />
+      </div>
+
+      {context && <ContextPanel result={result} />}
+
+      {(notes.length > 0 || !risk.calibrated) && (
+        <div className="stack stack-3 rise rise-5">
+          {!risk.calibrated && (
+            <Notice tone="warn">
+              Fusion weights are uncalibrated placeholders. This score is advisory —
+              do not automate an irreversible action on it.
+            </Notice>
+          )}
+          {notes.map((note, index) => (
+            <Notice key={index} tone="info">
+              {note}
+            </Notice>
+          ))}
+        </div>
       )}
     </div>
   );
 }
+
+/* ------------------------------------------------------------ anti-spoof */
+
+function AntiSpoofPanel({ result }: { result: AnalysisResult }) {
+  const { anti_spoof } = result;
+
+  if (anti_spoof.model_status === "neural" && anti_spoof.synthetic_probability !== null) {
+    const probability = anti_spoof.synthetic_probability;
+    const synthetic = probability >= 0.5;
+
+    return (
+      <Panel
+        title="Anti-spoof"
+        aside={
+          <Pill signal={synthetic ? "critical" : "clear"}>
+            {synthetic ? "Synthetic" : "Genuine speech"}
+          </Pill>
+        }
+        note="Measured at this operating point: 94.95% of attacks detected at a 0.79% false-alarm rate, on 35,619 held-out utterances across 13 attack types the model never trained on."
+      >
+        <div className="stack stack-5">
+          <div>
+            <div className="label" style={{ marginBottom: 8 }}>
+              Calibrated probability
+            </div>
+            <div
+              className="mono"
+              style={{
+                fontSize: "var(--t-2xl)",
+                fontWeight: 600,
+                letterSpacing: "-.03em",
+                color: synthetic ? "var(--sig-critical)" : "var(--sig-clear)",
+              }}
+            >
+              {formatProbability(probability)}
+            </div>
+          </div>
+
+          <ThresholdRuler probability={probability} />
+
+          <DataList>
+            <DataRow
+              label="Raw model score"
+              qualifier="uncalibrated"
+              value={anti_spoof.raw_probability?.toFixed(4) ?? "—"}
+            />
+            {anti_spoof.speech_check && (
+              <DataRow
+                label="Dynamic range"
+                qualifier="speech is >10"
+                value={anti_spoof.speech_check.dynamic_range.toFixed(1)}
+              />
+            )}
+          </DataList>
+        </div>
+      </Panel>
+    );
+  }
+
+  if (anti_spoof.model_status === "no_speech") {
+    return (
+      <Panel
+        title="Anti-spoof"
+        aside={<Pill signal="unknown">Not assessed</Pill>}
+        note="The detector is a speech model. Asked about silence or noise it answers confidently and wrongly — 0.999 and 0.997 synthetic respectively, measured — so the branch is withheld instead of guessed."
+      >
+        <div className="stack stack-4">
+          <p className="prose" style={{ fontSize: "var(--t-md)" }}>
+            {anti_spoof.speech_check?.reason}
+          </p>
+          {anti_spoof.speech_check && (
+            <DataList>
+              <DataRow label="Level" qualifier="RMS" value={anti_spoof.speech_check.rms.toFixed(5)} />
+              <DataRow
+                label="Dynamic range"
+                qualifier="threshold 3.0"
+                value={anti_spoof.speech_check.dynamic_range.toFixed(1)}
+              />
+              <DataRow label="Duration" value={`${anti_spoof.speech_check.seconds.toFixed(1)}s`} />
+            </DataList>
+          )}
+        </div>
+      </Panel>
+    );
+  }
+
+  return (
+    <Panel title="Anti-spoof" aside={<Pill signal="neutral">{anti_spoof.model_status}</Pill>}>
+      <div className="empty">
+        <div className="empty-icon">
+          <Waves size={18} />
+        </div>
+        <h4>Branch did not contribute</h4>
+        <p>No trained checkpoint is loaded, so nothing was scored.</p>
+      </div>
+    </Panel>
+  );
+}
+
+/* --------------------------------------------------------------- speaker */
+
+function SpeakerPanel({
+  result,
+  thresholds,
+}: {
+  result: AnalysisResult;
+  thresholds?: { match: number; no_match: number };
+}) {
+  const { speaker } = result;
+
+  if (!speaker) {
+    return (
+      <Panel title="Speaker identity" aside={<Pill signal="unknown">Not assessed</Pill>}>
+        <div className="empty">
+          <div className="empty-icon">
+            <Fingerprint size={18} />
+          </div>
+          <h4>No identity claimed</h4>
+          <p>
+            Nothing here says whether the speaker is who they claim to be. A low risk
+            score above is an anti-spoof result only.
+          </p>
+        </div>
+      </Panel>
+    );
+  }
+
+  const signal = signalForVerification(speaker.decision);
+
+  return (
+    <Panel
+      title="Speaker identity"
+      aside={<Pill signal={signal}>{speaker.decision.replace("_", " ")}</Pill>}
+      note="Between the two thresholds the answer is UNCERTAIN, deliberately — a two-way split would force a guess on exactly the scores the system knows least about."
+    >
+      <div className="stack stack-5">
+        <div>
+          <div className="label" style={{ marginBottom: 8 }}>
+            Cosine similarity against {speaker.identity}
+          </div>
+          <div
+            className="mono"
+            style={{
+              fontSize: "var(--t-2xl)",
+              fontWeight: 600,
+              letterSpacing: "-.03em",
+              color: signalVar(signal),
+            }}
+          >
+            {speaker.similarity.toFixed(3)}
+          </div>
+        </div>
+
+        {thresholds && (
+          <SimilarityScale
+            similarity={speaker.similarity}
+            matchAt={thresholds.match}
+            noMatchAt={thresholds.no_match}
+          />
+        )}
+
+        {speaker.reasons?.length > 0 && (
+          <ul
+            style={{
+              paddingLeft: 16,
+              fontSize: "var(--t-sm)",
+              color: "var(--text-2)",
+              lineHeight: 1.6,
+            }}
+          >
+            {speaker.reasons.map((reason, index) => (
+              <li key={index} style={{ marginBottom: 4 }}>
+                {reason}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </Panel>
+  );
+}
+
+/* --------------------------------------------------------------- context */
+
+function ContextPanel({ result }: { result: AnalysisResult }) {
+  const context = result.context!;
+  const percent = context.risk * 100;
+  const signal: Signal =
+    percent >= 70 ? "critical" : percent >= 35 ? "watch" : "clear";
+
+  return (
+    <Panel
+      title="Call context"
+      aside={<Pill signal={signal}>{percent.toFixed(0)}% of assessable risk</Pill>}
+      className="rise rise-4"
+      note="Scored as a fraction of the risk that could be assessed, not of all conceivable risk — otherwise two bad signals out of two look harmless."
+    >
+      <div className="grid grid-2">
+        <div className="stack stack-4">
+          <DataList>
+            <DataRow
+              label="Points"
+              value={`${context.points.toFixed(0)} / ${context.possible.toFixed(0)}`}
+            />
+            <DataRow label="Signals collected" value={context.signals_used.length} />
+            <DataRow label="Not collected" value={context.missing.length} />
+          </DataList>
+        </div>
+
+        <div>
+          {context.reasons.length > 0 ? (
+            <ul className="stack stack-2" style={{ listStyle: "none" }}>
+              {context.reasons.map((reason, index) => (
+                <li
+                  key={index}
+                  style={{
+                    display: "flex",
+                    gap: "var(--s2)",
+                    fontSize: "var(--t-sm)",
+                    lineHeight: 1.5,
+                    color: "var(--text-2)",
+                  }}
+                >
+                  <CircleAlert
+                    size={13}
+                    style={{ color: signalVar(signal), flex: "none", marginTop: 3 }}
+                  />
+                  {reason}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div
+              className="row"
+              style={{ gap: "var(--s2)", fontSize: "var(--t-sm)", color: "var(--text-3)" }}
+            >
+              <Gauge size={14} /> Every collected signal is clear.
+            </div>
+          )}
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
+/* --------------------------------------------------------- loading state */
+
+/**
+ * A skeleton shaped like the result it is waiting for.
+ *
+ * The first analysis of a session loads a 362 MB checkpoint and takes about six
+ * seconds. A spinner for six seconds reads as a hang; a layout that is already
+ * the right shape reads as work in progress.
+ */
+export function ResultSkeleton({ note }: { note?: string }) {
+  return (
+    <div className="stack stack-4 fade">
+      <div className="panel" style={{ padding: "var(--s6)" }}>
+        <div className="stack stack-4">
+          <div className="skeleton" style={{ height: 11, width: 72 }} />
+          <div className="skeleton" style={{ height: 54, width: 190 }} />
+          <div className="skeleton" style={{ height: 10, width: "100%" }} />
+        </div>
+      </div>
+      <div className="panel" style={{ padding: "var(--s5)" }}>
+        <div className="stack stack-3">
+          <div className="skeleton" style={{ height: 13, width: "62%" }} />
+          <div className="skeleton" style={{ height: 13, width: "44%" }} />
+          <div className="skeleton" style={{ height: 13, width: "53%" }} />
+        </div>
+      </div>
+      {note && (
+        <div
+          className="row"
+          style={{ gap: "var(--s2)", fontSize: "var(--t-sm)", color: "var(--text-3)" }}
+        >
+          <ScanLine size={14} className="dim" />
+          {note}
+        </div>
+      )}
+    </div>
+  );
+}
+
