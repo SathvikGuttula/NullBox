@@ -1,0 +1,222 @@
+{
+  "samples": 71237,
+  "bonafide": 7355,
+  "spoof": 63882,
+  "prior_spoof_used": 0.05,
+  "eer": 0.02950702505134217,
+  "eer_percent": 2.950702505134217,
+  "eer_threshold": 0.04434824936665457,
+  "min_dcf": 0.14743547070587806,
+  "min_dcf_threshold": 0.31168869137763977,
+  "roc_auc": 0.986331019137064,
+  "at_threshold_0.5": {
+    "threshold": 0.5,
+    "accuracy": 0.8920083664387888,
+    "precision": 0.9997865262483767,
+    "recall": 0.8797626874549952,
+    "f1": 0.9359423789499979,
+    "false_alarm_rate": 0.0016315431679129844,
+    "miss_rate": 0.12023731254500485,
+    "confusion_matrix": [
+      [
+        7343,
+        12
+      ],
+      [
+        7681,
+        56201
+      ]
+    ],
+    "confusion_matrix_legend": {
+      "rows": "true [bonafide, spoof]",
+      "cols": "predicted [bonafide, spoof]"
+    }
+  },
+  "at_eer_threshold": {
+    "threshold": 0.04434824936665457,
+    "accuracy": 0.9704928618554964,
+    "precision": 0.9965120390908798,
+    "recall": 0.9704924704924704,
+    "f1": 0.9833301611470625,
+    "false_alarm_rate": 0.029503738953093134,
+    "miss_rate": 0.02950752950752951,
+    "confusion_matrix": [
+      [
+        7138,
+        217
+      ],
+      [
+        1885,
+        61997
+      ]
+    ],
+    "confusion_matrix_legend": {
+      "rows": "true [bonafide, spoof]",
+      "cols": "predicted [bonafide, spoof]"
+    }
+  },
+  "at_min_dcf_threshold": {
+    "threshold": 0.31168869137763977,
+    "accuracy": 0.9115347361623876,
+    "precision": 0.9996702419382831,
+    "recall": 0.9016467862621709,
+    "f1": 0.9481316872427984,
+    "false_alarm_rate": 0.0025832766825288917,
+    "miss_rate": 0.09835321373782913,
+    "confusion_matrix": [
+      [
+        7336,
+        19
+      ],
+      [
+        6283,
+        57599
+      ]
+    ],
+    "confusion_matrix_legend": {
+      "rows": "true [bonafide, spoof]",
+      "cols": "predicted [bonafide, spoof]"
+    }
+  },
+  "at_1pct_false_alarm": {
+    "threshold": 0.9903476238250734,
+    "accuracy": 0.10324690820781336,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "false_alarm_rate": 0.0,
+    "miss_rate": 1.0,
+    "confusion_matrix": [
+      [
+        7355,
+        0
+      ],
+      [
+        63882,
+        0
+      ]
+    ],
+    "confusion_matrix_legend": {
+      "rows": "true [bonafide, spoof]",
+      "cols": "predicted [bonafide, spoof]"
+    }
+  },
+  "accuracy": 0.8920083664387888,
+  "f1": 0.9359423789499979,
+  "confusion_matrix": [
+    [
+      7343,
+      12
+    ],
+    [
+      7681,
+      56201
+    ]
+  ],
+  "per_attack": {
+    "A07": {
+      "samples": 4914,
+      "miss_rate": 0.000407000407000407,
+      "mean_spoof_score": 0.8788504565857111,
+      "label": 1
+    },
+    "A08": {
+      "samples": 4914,
+      "miss_rate": 0.0,
+      "mean_spoof_score": 0.9737301669093011,
+      "label": 1
+    },
+    "A09": {
+      "samples": 4914,
+      "miss_rate": 0.0,
+      "mean_spoof_score": 0.976213268574826,
+      "label": 1
+    },
+    "A10": {
+      "samples": 4914,
+      "miss_rate": 0.09320309320309321,
+      "mean_spoof_score": 0.46947317193559834,
+      "label": 1
+    },
+    "A11": {
+      "samples": 4914,
+      "miss_rate": 0.000814000814000814,
+      "mean_spoof_score": 0.9579379704307445,
+      "label": 1
+    },
+    "A12": {
+      "samples": 4914,
+      "miss_rate": 0.0,
+      "mean_spoof_score": 0.9714764552960369,
+      "label": 1
+    },
+    "A13": {
+      "samples": 4914,
+      "miss_rate": 0.0,
+      "mean_spoof_score": 0.9781274465729562,
+      "label": 1
+    },
+    "A14": {
+      "samples": 4914,
+      "miss_rate": 0.0,
+      "mean_spoof_score": 0.9230466606736025,
+      "label": 1
+    },
+    "A15": {
+      "samples": 4914,
+      "miss_rate": 0.002035002035002035,
+      "mean_spoof_score": 0.9123078802233584,
+      "label": 1
+    },
+    "A16": {
+      "samples": 4914,
+      "miss_rate": 0.0014245014245014246,
+      "mean_spoof_score": 0.9592936929648134,
+      "label": 1
+    },
+    "A17": {
+      "samples": 4914,
+      "miss_rate": 0.07692307692307693,
+      "mean_spoof_score": 0.6942700115216333,
+      "label": 1
+    },
+    "A18": {
+      "samples": 4914,
+      "miss_rate": 0.18091168091168092,
+      "mean_spoof_score": 0.5610564308135634,
+      "label": 1
+    },
+    "A19": {
+      "samples": 4914,
+      "miss_rate": 0.02787952787952788,
+      "mean_spoof_score": 0.8467388957709311,
+      "label": 1
+    },
+    "bonafide": {
+      "samples": 7355,
+      "false_alarm_rate": 0.029503738953093134,
+      "mean_spoof_score": 0.03319143553439814,
+      "label": 0
+    }
+  },
+  "checkpoint": "/kaggle/working/models/voxshield_full.pt",
+  "manifest": "datasets/manifests/test.csv",
+  "calibrated": false,
+  "calibration_temperature": 1.0,
+  "architecture": {
+    "encoder_name": "facebook/wav2vec2-base",
+    "use_spectral": true,
+    "spectral_dim": 128,
+    "hidden_dim": 256,
+    "dropout": 0.2,
+    "sample_rate": 16000
+  },
+  "training_metadata": {
+    "epoch": 4,
+    "val_eer": 0.0019623233908948193,
+    "val_roc_auc": 0.9997886823438493,
+    "val_accuracy": 0.9964981484463049,
+    "git_commit": "d08b4dc",
+    "experiment_id": "kaggle-full"
+  }
+}

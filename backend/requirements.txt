@@ -1,3 +1,23 @@
+# ---------------------------------------------------------------------------
+# VoxShield backend dependencies
+#
+# IMPORTANT - PyTorch is NOT installed from here.
+#
+# On Windows the PyPI torch wheels are CPU-only, so `pip install torch` gives
+# you a build that cannot see the GPU at all. Install the CUDA build first,
+# from PyTorch's own index, then install this file:
+#
+#   pip install --index-url https://download.pytorch.org/whl/cu130 \
+#       torch==2.14.0+cu130 torchaudio==2.11.0+cu130
+#   pip install -r backend/requirements.txt
+#
+# cu130 matches the CUDA 13.1 driver on this machine. For an older driver use
+# cu128. Verify afterwards:
+#
+#   python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+# ---------------------------------------------------------------------------
+
+# --- API ---
 fastapi
 uvicorn[standard]
 pydantic
@@ -5,10 +25,31 @@ pydantic-settings
 sqlalchemy
 asyncpg
 python-dotenv
-pytest
-httpx
+python-multipart   # file uploads on /speakers and /analyze
 
+# --- audio ---
 numpy
 scipy
 librosa
 soundfile
+
+# --- machine learning ---
+# torch and torchaudio: see the note above, install from the CUDA index.
+# Pinned below 5: model.py guards the private
+# encoder._get_feature_vector_attention_mask behind hasattr, so if v5
+# renames it the masked-pooling path degrades SILENTLY to no mask rather
+# than raising. Re-test that path before lifting the ceiling.
+transformers>=4.44,<5
+# Speaker verification (Phase 4): pretrained ECAPA-TDNN.
+# On Windows it must fetch with LocalStrategy.COPY - the default
+# symlink strategy needs administrator rights or Developer Mode.
+speechbrain>=1.0
+scikit-learn
+pandas
+tqdm
+matplotlib
+
+# --- tests ---
+pytest
+anyio
+httpx

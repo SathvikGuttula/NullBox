@@ -1,6 +1,7 @@
 import json
 
 from fastapi import WebSocket, WebSocketDisconnect
+from starlette.concurrency import run_in_threadpool
 
 from app.audio.feature_pipeline import (
     AudioFeaturePipeline,
@@ -19,6 +20,8 @@ class AudioStreamManager:
         self,
         call_id: str,
         websocket: WebSocket,
+        claimed_identity: str | None = None,
+        call_context=None,
     ):
 
         await websocket.accept()
@@ -27,10 +30,16 @@ class AudioStreamManager:
             call_id
         ] = websocket
 
+        # The claimed identity and the call context are fixed for the life of
+        # the call. Letting either change mid-stream would let a caller re-aim
+        # the identity check at whichever profile happened to match, or drop
+        # the context signals once they started counting against them.
         self.pipelines[
             call_id
         ] = AudioFeaturePipeline(
             sample_rate=16000,
+            claimed_identity=claimed_identity,
+            call_context=call_context,
         )
 
     async def disconnect(
@@ -68,14 +77,27 @@ class AudioStreamManager:
                     await websocket.receive()
                 )
 
+                # websocket.receive() returns the raw ASGI message and does
+                # NOT raise on disconnect - it yields a disconnect message.
+                # Relying on the WebSocketDisconnect except-branch alone left
+                # this loop spinning on a dead socket forever.
+                if message.get("type") == "websocket.disconnect":
+                    await self.disconnect(call_id)
+                    return
+
                 if "bytes" in message:
 
                     audio_bytes = (
                         message["bytes"]
                     )
 
-                    result = pipeline.process(
-                        audio_bytes
+                    # Feature extraction and model inference are synchronous
+                    # CPU/GPU work measured in tens of milliseconds. Running
+                    # them inline would block the event loop and stall every
+                    # other concurrent call on this worker.
+                    result = await run_in_threadpool(
+                        pipeline.process,
+                        audio_bytes,
                     )
 
                     segment_id += 1
